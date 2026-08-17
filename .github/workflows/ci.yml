@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: ./gradlew :document:test :ai-api:test :app:assembleDebug
+      - name: Reject iText
+        run: |
+          if ./gradlew :app:dependencies | grep -i "itext"; then
+            echo "iText is forbidden by the MIT dependency policy"
+            exit 1
+          fi

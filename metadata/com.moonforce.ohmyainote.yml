@@ -1,0 +1,32 @@
+Categories:
+  - Science & Education
+License: MIT
+AuthorName: Moon-Force and oh-my-ainote contributors
+WebSite: https://github.com/Moon-Force/oh-my-ainote
+SourceCode: https://github.com/Moon-Force/oh-my-ainote
+IssueTracker: https://github.com/Moon-Force/oh-my-ainote/issues
+
+AutoName: oh-my-ainote
+Summary: Local-first handwriting notebook for Android tablets
+Description: |-
+  A local-first, account-free notebook for Android tablets. It supports template,
+  PDF and image paper, low-latency AndroidX Ink handwriting, optional user-supplied
+  OpenAI-compatible vision endpoints, flattened PDF export and the portable .ainote
+  format. Network access occurs only when the user explicitly asks about a selected
+  page region.
+
+RepoType: git
+Repo: https://github.com/Moon-Force/oh-my-ainote.git
+
+Builds:
+  - versionName: 0.1.0
+    versionCode: 1
+    commit: v0.1.0
+    subdir: app
+    gradle:
+      - yes
+
+AutoUpdateMode: Version %v
+UpdateCheckMode: Tags
+CurrentVersion: 0.1.0
+CurrentVersionCode: 1

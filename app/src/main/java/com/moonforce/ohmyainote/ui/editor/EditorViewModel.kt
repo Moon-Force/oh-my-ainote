@@ -1,0 +1,426 @@
+package com.moonforce.ohmyainote.ui.editor
+
+import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.ink.strokes.Stroke
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.moonforce.ohmyainote.ai.OverlaySession
+import com.moonforce.ohmyainote.di.AppContainer
+import com.moonforce.ohmyainote.document.model.AiCardRecord
+import com.moonforce.ohmyainote.document.model.NotebookId
+import com.moonforce.ohmyainote.document.model.NotebookManifest
+import com.moonforce.ohmyainote.document.model.PageId
+import com.moonforce.ohmyainote.document.model.PageRect
+import com.moonforce.ohmyainote.document.model.PageSnapshot
+import com.moonforce.ohmyainote.document.model.Sink
+import com.moonforce.ohmyainote.document.model.StrokeRecord
+import com.moonforce.ohmyainote.document.store.NotebookSession
+import com.moonforce.ohmyainote.export.ExportOptions
+import com.moonforce.ohmyainote.ink.BrushCatalog
+import com.moonforce.ohmyainote.ink.FinishedStroke
+import com.moonforce.ohmyainote.ink.StrokeBridge
+import com.moonforce.ohmyainote.ink.Tool
+import com.moonforce.ohmyainote.ink.eraseIntersectingStrokes
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.util.UUID
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+data class EditorUiState(
+    val manifest: NotebookManifest? = null,
+    val pageIndex: Int = 0,
+    val snapshot: PageSnapshot? = null,
+    val finishedStrokes: List<FinishedStroke> = emptyList(),
+    val tool: Tool = Tool.PEN,
+    val colorArgb: Int = BrushCatalog.defaultColor(Tool.PEN),
+    val overlay: OverlaySession? = null,
+    val aiLoading: Boolean = false,
+    val confirmationUrl: String? = null,
+    val settingsRequired: Boolean = false,
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
+    val busyMessage: String? = null,
+    val error: String? = null,
+    val lastDryHandoffMs: Double? = null,
+)
+
+class EditorViewModel(
+    private val container: AppContainer,
+    private val notebookId: NotebookId,
+) : ViewModel() {
+    private lateinit var session: NotebookSession
+    private val mutableState = MutableStateFlow(EditorUiState())
+    val state: StateFlow<EditorUiState> = mutableState.asStateFlow()
+    private val undo = ArrayDeque<EditorAction>()
+    private val redo = ArrayDeque<EditorAction>()
+    private val persistenceJobs = mutableSetOf<Job>()
+    private val persistenceMutex = Mutex()
+    private var pendingQuestion: String? = null
+    private var loadGeneration = 0
+
+    val notebookDirectory get() = container.context.filesDir.toPath().resolve("notebooks/${notebookId.value}")
+    private val notebookDir get() = notebookDirectory
+
+    init {
+        viewModelScope.launch {
+            runCatching {
+                session = container.notebookStore.open(notebookId)
+                mutableState.update { it.copy(manifest = session.manifest.value) }
+                loadPage(0)
+            }.onFailure(::report)
+        }
+    }
+
+    fun loadPage(index: Int) {
+        val manifest = mutableState.value.manifest ?: return
+        if (index !in manifest.pageOrder.indices) return
+        val generation = ++loadGeneration
+        viewModelScope.launch {
+            runCatching {
+                val snapshot = session.page(PageId(manifest.pageOrder[index]))
+                val finished = StrokeBridge.load(snapshot.strokes)
+                if (generation == loadGeneration) {
+                    undo.clear()
+                    redo.clear()
+                    mutableState.update {
+                        it.copy(
+                            pageIndex = index,
+                            snapshot = snapshot,
+                            finishedStrokes = finished,
+                            overlay = null,
+                            canUndo = false,
+                            canRedo = false,
+                        )
+                    }
+                }
+            }.onFailure(::report)
+        }
+    }
+
+    fun setTool(tool: Tool) {
+        mutableState.update {
+            it.copy(tool = tool, colorArgb = BrushCatalog.defaultColor(tool), overlay = if (tool != Tool.BOX_ASK) null else it.overlay)
+        }
+    }
+
+    /** Called on the UI run loop; dry state is updated before persistence to prevent wet/dry flicker. */
+    fun onStrokesFinished(strokes: List<Stroke>) {
+        val started = System.nanoTime()
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (!current.tool.isWritingTool()) return
+        val records = strokes.map { StrokeBridge.fromInk(it, current.tool, current.colorArgb) }
+        val finished = records.zip(strokes).map { (record, ink) -> FinishedStroke(record, ink) }
+        applyLocalStrokes(snapshot.strokes + records, current.finishedStrokes + finished)
+        mutableState.update { it.copy(lastDryHandoffMs = (System.nanoTime() - started) / 1_000_000.0) }
+        push(EditorAction.Add(snapshot.page.id, records))
+        persist { session.appendStrokes(PageId(snapshot.page.id), records) }
+    }
+
+    fun eraseSegment(previousX: Float, previousY: Float, currentX: Float, currentY: Float) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        val ids = eraseIntersectingStrokes(previousX, previousY, currentX, currentY, current.finishedStrokes)
+        if (ids.isEmpty()) return
+        val removed = snapshot.strokes.filter { it.id in ids }
+        val records = snapshot.strokes.filterNot { it.id in ids }
+        val finished = current.finishedStrokes.filterNot { it.record.id in ids }
+        applyLocalStrokes(records, finished)
+        push(EditorAction.Remove(snapshot.page.id, removed))
+        persist { session.removeStrokes(PageId(snapshot.page.id), ids) }
+    }
+
+    fun selectForAsk(selection: PageRect) {
+        val current = mutableState.value
+        val manifest = current.manifest ?: return
+        val snapshot = current.snapshot ?: return
+        viewModelScope.launch {
+            val settings = container.aiSettingsStore.resolvedOrNull()
+            if (settings == null) {
+                mutableState.update { it.copy(settingsRequired = true) }
+                return@launch
+            }
+            mutableState.update { it.copy(busyMessage = "正在生成选区图片…", error = null) }
+            runCatching {
+                awaitPersistence()
+                container.pageRasterComposer.compose(manifest, snapshot, notebookDir, selection)
+            }.onSuccess { region ->
+                mutableState.update {
+                    it.copy(overlay = OverlaySession(snapshot.page.id, selection, region), busyMessage = null, tool = Tool.BOX_ASK)
+                }
+            }.onFailure(::report)
+        }
+    }
+
+    fun ask(question: String) {
+        if (question.isBlank() || mutableState.value.overlay == null) return
+        viewModelScope.launch {
+            val settings = container.aiSettingsStore.resolvedOrNull()
+            if (settings == null) {
+                mutableState.update { it.copy(settingsRequired = true) }
+                return@launch
+            }
+            if (!container.aiSettingsStore.isConfirmedFor(settings.baseUrl)) {
+                pendingQuestion = question.trim()
+                mutableState.update { it.copy(confirmationUrl = settings.baseUrl) }
+                return@launch
+            }
+            performAsk(question.trim())
+        }
+    }
+
+    fun confirmAndAsk() {
+        val url = mutableState.value.confirmationUrl ?: return
+        val question = pendingQuestion ?: return
+        viewModelScope.launch {
+            container.aiSettingsStore.confirm(url)
+            mutableState.update { it.copy(confirmationUrl = null) }
+            pendingQuestion = null
+            performAsk(question)
+        }
+    }
+
+    fun cancelConfirmation() {
+        pendingQuestion = null
+        mutableState.update { it.copy(confirmationUrl = null) }
+    }
+
+    private suspend fun performAsk(question: String) {
+        val overlay = mutableState.value.overlay ?: return
+        val settings = container.aiSettingsStore.resolvedOrNull() ?: return
+        mutableState.update { it.copy(aiLoading = true, error = null) }
+        runCatching {
+            container.aiClient.askAboutImage(overlay.region.jpeg, question, settings)
+        }.onSuccess { answer ->
+            overlay.add(question, answer)
+            mutableState.update { it.copy(overlay = overlay, aiLoading = false) }
+        }.onFailure(::report)
+    }
+
+    fun insertCurrentCard() {
+        val current = mutableState.value
+        val overlay = current.overlay ?: return
+        val snapshot = current.snapshot ?: return
+        if (overlay.turns.isEmpty()) return
+        val cardId = UUID.randomUUID().toString()
+        val relative = "media/cards/$cardId.jpg"
+        val card = overlay.currentCard(snapshot.page.widthPt, snapshot.page.heightPt, relative, cardId)
+        val target = notebookDir.resolve(relative)
+        runCatching {
+            Files.createDirectories(target.parent)
+            Files.write(target, overlay.region.jpeg)
+        }.onFailure { report(it); return }
+        val nextPage = snapshot.page.copy(cards = snapshot.page.cards + card)
+        mutableState.update { it.copy(snapshot = snapshot.copy(page = nextPage), overlay = null) }
+        push(EditorAction.InsertCard(snapshot.page.id, card))
+        persist { session.insertCard(PageId(snapshot.page.id), card) }
+    }
+
+    fun closeOverlay() = mutableState.update { it.copy(overlay = null, tool = Tool.PEN) }
+
+    fun undo() {
+        val action = undo.removeLastOrNull() ?: return
+        redo.addLast(action)
+        applyAction(action, reverse = true)
+        updateHistoryFlags()
+    }
+
+    fun redo() {
+        val action = redo.removeLastOrNull() ?: return
+        undo.addLast(action)
+        applyAction(action, reverse = false)
+        updateHistoryFlags()
+    }
+
+    private fun applyAction(action: EditorAction, reverse: Boolean) {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (snapshot.page.id != action.pageId) return
+        when (action) {
+            is EditorAction.Add -> if (reverse) removeRecords(snapshot, action.records) else addRecords(snapshot, action.records)
+            is EditorAction.Remove -> if (reverse) addRecords(snapshot, action.records) else removeRecords(snapshot, action.records)
+            is EditorAction.InsertCard -> {
+                val cards = if (reverse) snapshot.page.cards.filterNot { it.id == action.card.id } else snapshot.page.cards + action.card
+                mutableState.update { it.copy(snapshot = snapshot.copy(page = snapshot.page.copy(cards = cards))) }
+                persist {
+                    if (reverse) session.deleteCard(PageId(action.pageId), action.card.id)
+                    else session.insertCard(PageId(action.pageId), action.card)
+                }
+            }
+        }
+    }
+
+    private fun addRecords(snapshot: PageSnapshot, records: List<StrokeRecord>) {
+        val next = snapshot.strokes + records
+        applyLocalStrokes(next, StrokeBridge.load(next))
+        persist { session.appendStrokes(PageId(snapshot.page.id), records) }
+    }
+
+    private fun removeRecords(snapshot: PageSnapshot, records: List<StrokeRecord>) {
+        val ids = records.map { it.id }.toSet()
+        val next = snapshot.strokes.filterNot { it.id in ids }
+        applyLocalStrokes(next, mutableState.value.finishedStrokes.filterNot { it.record.id in ids })
+        persist { session.removeStrokes(PageId(snapshot.page.id), ids) }
+    }
+
+    fun addTemplatePage() {
+        viewModelScope.launch {
+            runCatching {
+                session.addTemplatePage()
+                mutableState.update { it.copy(manifest = session.manifest.value) }
+                loadPage(session.manifest.value.pageCount - 1)
+            }.onFailure(::report)
+        }
+    }
+
+    fun appendImagePage(uri: Uri) {
+        viewModelScope.launch {
+            var source: com.moonforce.ohmyainote.document.model.SourceFile? = null
+            runCatching {
+                source = container.importProcessors.bakeImage(uri)
+                session.addImagePage(requireNotNull(source))
+                mutableState.update { it.copy(manifest = session.manifest.value) }
+                loadPage(session.manifest.value.pageCount - 1)
+            }.onFailure(::report)
+            source?.path?.let { Files.deleteIfExists(it) }
+        }
+    }
+
+    fun close(onClosed: () -> Unit) {
+        viewModelScope.launch {
+            runCatching {
+                awaitPersistence()
+                updateCover()
+            }
+            onClosed()
+        }
+    }
+
+    fun exportPdf(uri: Uri) = viewModelScope.launch {
+        val manifest = mutableState.value.manifest ?: return@launch
+        mutableState.update { it.copy(busyMessage = "正在导出 PDF…", error = null) }
+        val temporary = container.context.cacheDir.toPath().resolve("export-${UUID.randomUUID()}.pdf")
+        runCatching {
+            awaitPersistence()
+            val pressure = container.aiSettingsStore.exportPressureVarying.first()
+            container.exporter.export(
+                manifest,
+                notebookDir,
+                temporary,
+                pageProvider = { session.page(PageId(it)) },
+                options = ExportOptions(pressureVarying = pressure, producer = "oh-my-ainote ${com.moonforce.ohmyainote.BuildConfig.VERSION_NAME}"),
+            )
+            container.context.contentResolver.openOutputStream(uri, "w").use { output ->
+                requireNotNull(output)
+                Files.copy(temporary, output)
+            }
+        }.onFailure(::report)
+        Files.deleteIfExists(temporary)
+        mutableState.update { it.copy(busyMessage = null) }
+    }
+
+    fun exportPackage(uri: Uri) = viewModelScope.launch {
+        mutableState.update { it.copy(busyMessage = "正在打包 .ainote…", error = null) }
+        val temporary = container.context.cacheDir.toPath().resolve("export-${UUID.randomUUID()}.ainote")
+        runCatching {
+            awaitPersistence()
+            container.notebookStore.packageToAinote(notebookId, Sink(temporary))
+            container.context.contentResolver.openOutputStream(uri, "w").use { output ->
+                requireNotNull(output)
+                Files.copy(temporary, output)
+            }
+        }.onFailure(::report)
+        Files.deleteIfExists(temporary)
+        mutableState.update { it.copy(busyMessage = null) }
+    }
+
+    fun consumeSettingsRequest() = mutableState.update { it.copy(settingsRequired = false) }
+    fun clearError() = mutableState.update { it.copy(error = null, aiLoading = false, busyMessage = null) }
+
+    private fun applyLocalStrokes(records: List<StrokeRecord>, finished: List<FinishedStroke>) {
+        mutableState.update { current ->
+            val snapshot = current.snapshot ?: return@update current
+            current.copy(
+                snapshot = snapshot.copy(page = snapshot.page.copy(strokes = records), strokes = records),
+                finishedStrokes = finished,
+            )
+        }
+    }
+
+    private fun push(action: EditorAction) {
+        undo.addLast(action)
+        while (undo.size > 80) undo.removeFirst()
+        redo.clear()
+        updateHistoryFlags()
+    }
+
+    private fun updateHistoryFlags() = mutableState.update { it.copy(canUndo = undo.isNotEmpty(), canRedo = redo.isNotEmpty()) }
+
+    private fun persist(block: suspend () -> Unit) {
+        val job = viewModelScope.launch {
+            runCatching { persistenceMutex.withLock { block() } }.onFailure(::report)
+        }
+        persistenceJobs += job
+        job.invokeOnCompletion { persistenceJobs -= job }
+    }
+
+    private suspend fun awaitPersistence() = persistenceJobs.toList().joinAll()
+
+    private suspend fun updateCover() {
+        val manifest = mutableState.value.manifest ?: return
+        val first = session.page(PageId(manifest.pageOrder.first()))
+        val region = container.pageRasterComposer.compose(
+            manifest,
+            first,
+            notebookDir,
+            PageRect(0f, 0f, first.page.widthPt, first.page.heightPt),
+        )
+        withContext(Dispatchers.IO) {
+            val source = requireNotNull(BitmapFactory.decodeByteArray(region.jpeg, 0, region.jpeg.size))
+            val scale = minOf(1f, 512f / maxOf(source.width, source.height))
+            val width = maxOf(1, (source.width * scale).toInt())
+            val height = maxOf(1, (source.height * scale).toInt())
+            val cover = if (width == source.width && height == source.height) source
+            else Bitmap.createScaledBitmap(source, width, height, true)
+            val target = notebookDir.resolve("media/cover.jpg")
+            val temporary = notebookDir.resolve("tmp/cover.jpg.tmp")
+            try {
+                Files.newOutputStream(temporary).use { output -> check(cover.compress(Bitmap.CompressFormat.JPEG, 85, output)) }
+                Files.move(temporary, target, REPLACE_EXISTING, ATOMIC_MOVE)
+            } finally {
+                if (cover !== source) cover.recycle()
+                source.recycle()
+                Files.deleteIfExists(temporary)
+            }
+        }
+    }
+
+    private fun report(failure: Throwable) {
+        mutableState.update {
+            it.copy(error = failure.message ?: failure.javaClass.simpleName, aiLoading = false, busyMessage = null)
+        }
+    }
+
+    private fun Tool.isWritingTool() = this == Tool.PEN || this == Tool.HIGHLIGHTER
+
+    private sealed interface EditorAction {
+        val pageId: String
+        data class Add(override val pageId: String, val records: List<StrokeRecord>) : EditorAction
+        data class Remove(override val pageId: String, val records: List<StrokeRecord>) : EditorAction
+        data class InsertCard(override val pageId: String, val card: AiCardRecord) : EditorAction
+    }
+}

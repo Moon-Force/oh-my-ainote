@@ -1,0 +1,5 @@
+oh-my-ainote is a local-first handwriting notebook for Android tablets, with no account and no tracking by default.
+
+It supports blank, lined, grid, PDF and image paper, uses AndroidX Ink for handwriting, and exports flattened PDF or editable .ainote packages.
+
+AI is entirely optional. The user supplies an OpenAI-compatible endpoint and API key. A selected-region JPEG, the question and the key are sent only after an explicit request and first-destination confirmation.
