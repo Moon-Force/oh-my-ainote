@@ -66,6 +66,21 @@ internal class PageDirectoryIo(
         return prepared
     }
 
+    fun listPageIds(): List<String> {
+        Files.list(pagesDir).use { paths ->
+            return paths.filter { Files.isDirectory(it) }
+                .map { it.fileName.toString().removeSuffix(".bak") }
+                .distinct()
+                .sorted()
+                .toList()
+        }
+    }
+
+    fun delete(pageId: String) {
+        deleteTreeIfPresent(pagesDir.resolve(pageId))
+        deleteTreeIfPresent(pagesDir.resolve("$pageId.bak"))
+    }
+
     fun read(pageId: String): PageSnapshot {
         val live = recover(pageId)
         val page = PageCodec.decode(readUtf8(live.resolve("page.json")))

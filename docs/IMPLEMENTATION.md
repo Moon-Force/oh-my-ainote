@@ -21,8 +21,9 @@
 - [x] PR-15：升级 AndroidX Ink 1.1.0-alpha07，基于官方 `pressurePen` 增加版本化线宽/浓淡压感并同步 PDF 导出
 - [x] PR-16：修复 Compose 位图生命周期，避免图片本打开崩溃、背景/封面消失与重用已回收位图
 - [x] PR-17：Material 3 编辑器工具区，接入钢笔/荧光笔颜色与粗细，固定视口避免属性栏导致纸面缩放或位移
+- [x] PR-18：模板空白页删除（含崩溃恢复重排）、AI 卡片点按只读全文展开、FileProvider Sharesheet 分享 PDF / `.ainote`、封面 5 s 防抖、性能浮层 move→frame 测量
 
-代码阶段完成不代表真机验收完成。USI 延迟、掌拒、200 页 PDF 内存和旋转 CropBox 导出对齐仍以 `MANUAL_TEST.md` 的未勾选项目为发布门禁。
+代码阶段完成不代表真机验收完成。2026-08-19 已在小米平板（Android 16 / USI 笔）真机通过：模板删页一致性、分享面板拉起、封面 5 s 防抖、200 页内存、旋转 CropBox 导出对齐（结构级）。USI 湿墨延迟、掌拒、压感线宽浓淡、AI 卡片问答等需真笔 / API Key 的条目仍以 `MANUAL_TEST.md` 的未勾选项为发布门禁。
 
 ## Verification snapshot
 
@@ -41,13 +42,13 @@
 
 ## Remaining release gates
 
-- USI 实机湿墨/干墨对齐、掌拒、笔尾橡皮和横向长笔画仲裁。
-- USI 实机轻/中/重压力的线宽与浓淡、快速转向、慢速收笔，以及保存重开和 PDF 导出后的视觉一致性。
-- 40/200 页 PDF 的翻页、缩放和内存稳定性。
-- `/Rotate 90` + 非零 CropBox 的屏幕、AI 裁切和导出视觉对齐。
-- 真机 Keystore、HTTP 首次警告、错误 Key、超时与 SAF 阅读器互操作。
+- USI 实机湿墨/干墨对齐、掌拒、笔尾橡皮和横向长笔画仲裁。（剩余）
+- USI 实机轻/中/重压力的线宽与浓淡、快速转向、慢速收笔，以及保存重开和 PDF 导出后的视觉一致性。（剩余）
+- 40/200 页 PDF 的翻页、缩放和内存稳定性。（200 页翻页无 OOM 已通过；高倍缩放与纸面写字剩余）
+- `/Rotate 90` + 非零 CropBox 的屏幕、AI 裁切和导出视觉对齐。（导出对齐已通过；AI 裁切剩余）
+- 真机 Keystore、HTTP 首次警告、错误 Key、超时与 SAF 阅读器互操作。（分享面板拉起已通过；SAF 阅读器打开与卡片可见剩余）
 
-这些项目只在 `MANUAL_TEST.md` 记录结果，不因代码阶段完成而预先勾选。
+这些项目只在 `MANUAL_TEST.md` 记录结果，不因代码阶段完成而预先勾选；已验证部分标注于 `MANUAL_TEST.md` 的 2026-08-19 执行记录。
 
 ## Known implementation deltas
 
@@ -56,11 +57,11 @@
 | 项目 | 当前实现 | 后续条件 |
 | --- | --- | --- |
 | PDF 高倍瓦片 / ±1 预取 | `TileCache`、`PrefetchController` 和双 renderer 已实现；编辑器当前仅显示当前页单张位图（最长边 4096） | 200 页与 4×/8× 失败则必须在 v1 发布前接入；即使通过，也应单独性能评审 |
-| 模板页管理 | 支持追加；尚未提供删页 UI/Store 操作 | 若 v1 保留“模板页可删除”承诺，发布前补齐 |
-| 封面刷新 | 退出编辑器时生成最长边 512 JPEG | 设计中的 5 秒防抖尚未接入，属于体验优化 |
-| AI 卡片 | 可显示、持久化、导出和随包往返 | 尚未提供点击后的只读全文展开 |
-| 导出分享 | SAF `CreateDocument` 可导出 PDF / `.ainote`，且有隐私确认 | FileProvider sharesheet 尚未提供 UI 入口 |
-| Debug 性能浮层 | 顶部更多菜单可开关 dry handoff、scale、mesh 和位图上限 | 尚未测量最后 move→frame，也未显示真实 tile cache 数据 |
+| 模板页管理 | 支持追加与删除空白页（至少保留 1 页），删页走同一崩溃安全页提交并可在 `open` 时重排/清孤儿 | 已完成；真机验收通过（加页/删页重排/末页守卫/杀进程重开一致） |
+| 封面刷新 | 首页变更 5 s 防抖生成最长边 512 JPEG，退出编辑器立即 flush | 已完成 |
+| AI 卡片 | 可显示、持久化、导出和随包往返；点按卡片只读展开全文（问题、回答、model、时间） | 已完成 |
+| 导出分享 | SAF `CreateDocument` 可导出，另有 FileProvider Sharesheet 分享 PDF / `.ainote`，均有隐私确认 | 已完成；真机分享面板拉起通过，目标 App 打开留待人工 |
+| Debug 性能浮层 | 顶部更多菜单可开关 dry handoff、move→frame、scale、mesh 和位图上限 | move→frame 已测量；tile cache 数据待瓦片接入后显示 |
 | Observability | 默认无远程日志/崩溃上报 | Timber 与可选 ACRA/Sentry 未接入；这不改变隐私边界 |
 
 其中“模板删页”是功能差异；PDF 瓦片是否成为发布阻断由目标设备的长 PDF 验收决定。其余项目不影响 `.ainote` v1 兼容性。
@@ -70,3 +71,24 @@
 - 图片导入后点击打开：已移除页面背景、AI 卡片缩略图和书架封面上的手动 `Bitmap.recycle()`，避免 Compose 仍在绘制时命中已回收位图。
 - 写字后纸面消失/缩小：工具区固定为 `140dp`，笔刷属性行只在该区域内展开；画布使用 `clipToBounds()`，不再覆盖工具区或触发页面重测量。
 - 编辑器工具区：钢笔、荧光笔、橡皮、顶部导出菜单已完成真机触摸检查；视觉对比记录见 [`../design-qa.md`](../design-qa.md)。
+
+## 2026-08-19 release-gate pass (PR-18)
+
+- 模板删页：`NotebookSession.deleteTemplatePage` 只接受模板本空白页且至少保留 1 页；协议 = 重排剩余页 `index` → 原子写 manifest → 删页目录与卡片媒体。`open()` 增加孤儿页目录清理与陈旧 `index` 重排，两个崩溃窗口均可恢复。JVM 测试覆盖重排、拒绝末页/含墨页、崩溃后重开修复（5 个新用例全过）。
+- AI 卡片：手指轻点卡片区域（≤16 px 位移判为 tap）弹出只读全文对话框；不新增 pointer 层，走既有 `routeEditorPointers` 触摸通道，不影响湿墨。
+- 分享：更多菜单新增「分享 PDF / 分享 .ainote」，复用隐私确认文案，导出到 `cacheDir/exports/`（已映射 FileProvider），`ACTION_SEND` + `FLAG_GRANT_READ_URI_PERMISSION` 送出；未注册任何 MIME/`SEND` intent-filter。
+- 封面：首页墨迹/卡片变更 5 s 防抖重新生成，`close()` 取消防抖并立即 flush，与 DESIGN.md:969 对齐。
+- 性能浮层：`routeEditorPointers` 新增 `onStylusMove` 时间戳回调（仅未拦截的书写笔触），`withFrameNanos` 采样最后 move→frame 延迟；tile cache 列显示 `n/a`，待瓦片接入后替换为真实数据。
+- 验证：`:document:test`（12 例）与 `:ai-api:test`（1 例）以直接 JUnit 方式通过（中文路径 Test Worker 限制见 `BUILDING.md`）；`assembleDebug` 通过。
+
+## 2026-08-19 device gate pass（真机，PR-18）
+
+设备：小米平板 2410CRP4CC（Android 16, arm64）+ 小米 USI 笔，无线 ADB。方法：`uiautomator dump` 取坐标点击 + `dumpsys window` 取焦点 + `run-as` 读文件系统；本设备 `adb screencap` 一度返回纯黑帧缓冲，视觉判定改用节点 dump / 文件系统 / 用户肉眼。
+
+- 模板删页：加页 1→2、删页 2→1（`pageOrder` 重排）、末页按钮 `clickable=false` 不可删、`am force-stop` 重开 manifest 一致。
+- 分享面板：分享 PDF → 继续分享 → `mCurrentFocus=com.android.intentresolver`，`cache/exports/share-*.pdf` 生成。
+- 封面 5 s 防抖：manifest `updatedAt` 15:30:45.605 → `cover.jpg` mtime 15:30:50.744，差 5.14 s。
+- 200 页内存：翻满 200/200 无 OOM，进程存活，PSS 289→540MB。
+- 旋转 CropBox 导出对齐：导出与源逐页几何一致，原始内容流逐字节内嵌（同对象哈希），仅加 `[q\n]`/`[Q\n]` 无缩放平移。
+
+剩余人工（需真笔 / API Key / 目标 App）：USI 湿墨延迟、掌拒、压感线宽浓淡、AI 卡片问答与错误文案、双指 pinch、图片 EXIF、SAF 图片导入、`.ainote` 往返、目标 App 打开分享文件后卡片可见。详见 `MANUAL_TEST.md` 的 2026-08-19 执行记录。

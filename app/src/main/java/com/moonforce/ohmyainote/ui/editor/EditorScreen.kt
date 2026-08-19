@@ -36,10 +36,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -54,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.moonforce.ohmyainote.document.model.AiCardRecord
 import com.moonforce.ohmyainote.document.model.NotebookKind
 import com.moonforce.ohmyainote.R
 import com.moonforce.ohmyainote.document.model.PagePoint
@@ -89,9 +92,14 @@ fun EditorScreen(
     var boxStart by remember { mutableStateOf<PagePoint?>(null) }
     var boxEnd by remember { mutableStateOf<PagePoint?>(null) }
     var touchStartX by remember { mutableStateOf<Float?>(null) }
+    var touchStartY by remember { mutableStateOf<Float?>(null) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
+    var pendingDeletePage by remember { mutableStateOf(false) }
+    var expandedCard by remember { mutableStateOf<AiCardRecord?>(null) }
     var showPerformance by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var lastWetMoveNanos by remember { mutableLongStateOf(0L) }
+    var lastMoveToFrameMs by remember { mutableFloatStateOf(0f) }
     val pdfExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         uri?.let(viewModel::exportPdf)
     }
@@ -103,6 +111,21 @@ fun EditorScreen(
     }
     BackHandler { viewModel.close(onBack) }
 
+    val recordWetMove: (Long) -> Unit = remember(viewModel) {
+        { nanos: Long ->
+            val tool = viewModel.state.value.tool
+            if (tool == Tool.PEN || tool == Tool.HIGHLIGHTER) lastWetMoveNanos = nanos
+        }
+    }
+    LaunchedEffect(showPerformance, stylusActive) {
+        if (!showPerformance || !stylusActive) return@LaunchedEffect
+        while (stylusActive) {
+            withFrameNanos { frameNanos ->
+                val started = lastWetMoveNanos
+                if (started > 0L) lastMoveToFrameMs = ((frameNanos - started) / 1_000_000.0).toFloat()
+            }
+        }
+    }
     LaunchedEffect(pagerState.currentPage, manifest?.pageCount) {
         if (manifest != null) viewModel.loadPage(pagerState.currentPage)
     }
@@ -169,7 +192,10 @@ fun EditorScreen(
         if (stylusActive) return
         val pressed = event.changes.filter { it.pressed }
         val down = event.changes.firstOrNull { it.pressed && !it.previousPressed }
-        if (down != null) touchStartX = down.position.x
+        if (down != null) {
+            touchStartX = down.position.x
+            touchStartY = down.position.y
+        }
         if (pressed.size == 1) {
             val change = pressed.single()
             val delta = change.position - change.previousPosition
@@ -190,10 +216,20 @@ fun EditorScreen(
         val up = event.changes.firstOrNull { !it.pressed && it.previousPressed }
         if (up != null && pressed.isEmpty()) {
             val start = touchStartX
+            val startY = touchStartY
             touchStartX = null
-            if (start != null && abs(up.position.x - start) > 160f && abs(viewport.scale - fitScale) < 0.05f) {
-                val target = if (up.position.x < start) pagerState.currentPage + 1 else pagerState.currentPage - 1
-                if (target in 0 until pagerState.pageCount) scope.launch { pagerState.animateScrollToPage(target) }
+            touchStartY = null
+            if (start != null && startY != null) {
+                if (abs(up.position.x - start) < 16f && abs(up.position.y - startY) < 16f) {
+                    expandedCard = snapshot?.page?.cards?.firstOrNull { card ->
+                        val point = pagePoint(up.position)
+                        point.x in card.anchor.x..(card.anchor.x + card.anchor.w) &&
+                            point.y in card.anchor.y..(card.anchor.y + card.anchor.h)
+                    }
+                } else if (abs(up.position.x - start) > 160f && abs(viewport.scale - fitScale) < 0.05f) {
+                    val target = if (up.position.x < start) pagerState.currentPage + 1 else pagerState.currentPage - 1
+                    if (target in 0 until pagerState.pageCount) scope.launch { pagerState.animateScrollToPage(target) }
+                }
             }
         }
     }
@@ -231,6 +267,14 @@ fun EditorScreen(
                                 text = { Text("导出 .ainote") },
                                 onClick = { showOverflowMenu = false; pendingExport = "ainote" },
                             )
+                            DropdownMenuItem(
+                                text = { Text("分享 PDF") },
+                                onClick = { showOverflowMenu = false; pendingExport = "share_pdf" },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("分享 .ainote") },
+                                onClick = { showOverflowMenu = false; pendingExport = "share_ainote" },
+                            )
                             if (com.moonforce.ohmyainote.BuildConfig.DEBUG) {
                                 DropdownMenuItem(
                                     text = { Text(if (showPerformance) "关闭性能信息" else "显示性能信息") },
@@ -262,6 +306,7 @@ fun EditorScreen(
                             onEraser = ::handleEraser,
                             onInterceptedStylus = ::handleInterceptedStylus,
                             onStylusActiveChanged = { stylusActive = it },
+                            onStylusMove = recordWetMove,
                         ),
                 ) {
                     HorizontalPager(
@@ -307,8 +352,9 @@ fun EditorScreen(
                     }
                     if (showPerformance) {
                         val handoff = state.lastDryHandoffMs?.let { "%.2f".format(it) } ?: "—"
+                        val moveFrame = if (lastWetMoveNanos > 0L) "%.2f".format(lastMoveToFrameMs) else "—"
                         Text(
-                            "dry handoff ${handoff} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · page bitmaps ≤1",
+                            "dry handoff ${handoff} ms · move→frame ${moveFrame} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · page bitmaps ≤1 · tiles n/a",
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xB0000000)).padding(6.dp),
@@ -329,6 +375,11 @@ fun EditorScreen(
                         NotebookKind.TEMPLATE -> viewModel::addTemplatePage
                         NotebookKind.IMAGE -> ({ appendImage.launch("image/*") })
                         else -> null
+                    },
+                    onDeletePage = if (manifest?.kind == NotebookKind.TEMPLATE) {
+                        { pendingDeletePage = true }
+                    } else {
+                        null
                     },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
                 )
@@ -366,18 +417,61 @@ fun EditorScreen(
         )
     }
     pendingExport?.let { kind ->
+        val isShare = kind.startsWith("share_")
         AlertDialog(
             onDismissRequest = { pendingExport = null },
-            title = { Text(if (kind == "pdf") "导出扁平 PDF" else "导出 .ainote") },
-            text = { Text("已插入纸面的 AI 卡片（问题、回答、选区图片和模型名）会进入导出文件；未插入的浮层对话不会导出。") },
+            title = {
+                Text(
+                    when (kind) {
+                        "pdf" -> "导出扁平 PDF"
+                        "ainote" -> "导出 .ainote"
+                        "share_pdf" -> "分享扁平 PDF"
+                        else -> "分享 .ainote"
+                    },
+                )
+            },
+            text = { Text("已插入纸面的 AI 卡片（问题、回答、选区图片和模型名）会进入文件并随分享离开本机；未插入的浮层对话不会。") },
             confirmButton = {
                 TextButton(onClick = {
+                    val base = manifest?.title ?: "note"
                     pendingExport = null
-                    if (kind == "pdf") pdfExport.launch("${manifest?.title ?: "note"}.pdf")
-                    else packageExport.launch("${manifest?.title ?: "note"}.ainote")
-                }) { Text("继续导出") }
+                    when (kind) {
+                        "pdf" -> pdfExport.launch("$base.pdf")
+                        "ainote" -> packageExport.launch("$base.ainote")
+                        "share_pdf" -> viewModel.sharePdf()
+                        else -> viewModel.sharePackage()
+                    }
+                }) { Text(if (isShare) "继续分享" else "继续导出") }
             },
             dismissButton = { TextButton(onClick = { pendingExport = null }) { Text("取消") } },
+        )
+    }
+    if (pendingDeletePage) {
+        AlertDialog(
+            onDismissRequest = { pendingDeletePage = false },
+            title = { Text("删除当前页") },
+            text = { Text("仅空白页可删除，删除后不可撤销，且至少保留一页。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeletePage = false
+                    viewModel.deleteTemplatePage()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDeletePage = false }) { Text("取消") } },
+        )
+    }
+    expandedCard?.let { card ->
+        AlertDialog(
+            onDismissRequest = { expandedCard = null },
+            title = { Text("AI 卡片") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("问：${card.question}", style = MaterialTheme.typography.titleSmall)
+                    Text(card.answer)
+                    Text("${card.model} · ${card.createdAt}", style = MaterialTheme.typography.labelSmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { expandedCard = null }) { Text("关闭") } },
         )
     }
     state.error?.let { message ->

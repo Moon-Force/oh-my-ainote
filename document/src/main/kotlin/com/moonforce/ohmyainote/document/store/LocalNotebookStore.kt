@@ -218,9 +218,18 @@ class LocalNotebookStore(
     override suspend fun open(id: NotebookId): NotebookSession = io {
         val dir = notebookDirectory(id)
         val manifest = readManifest(dir)
-        PageDirectoryIo(dir, crashInjector).recoverAll()
-        manifest.pageOrder.forEach { pageId ->
-            PageDirectoryIo(dir, crashInjector).read(pageId).page.validateFor(manifest)
+        val pageIo = PageDirectoryIo(dir, crashInjector)
+        pageIo.recoverAll()
+        // A deleteTemplatePage crash after the manifest commit can leave the victim directory orphaned.
+        val validIds = manifest.pageOrder.toSet()
+        pageIo.listPageIds().filterNot { it in validIds }.forEach(pageIo::delete)
+        // A deleteTemplatePage crash before the manifest commit can leave stale indexes; manifest order is authoritative.
+        manifest.pageOrder.forEachIndexed { index, pageId ->
+            var snapshot = pageIo.read(pageId)
+            if (snapshot.page.index != index) {
+                snapshot = pageIo.commit(snapshot.copy(page = snapshot.page.copy(index = index)))
+            }
+            snapshot.page.validateFor(manifest)
         }
         LocalNotebookSession(dir, manifest, crashInjector, ::writeManifest)
     }
@@ -486,6 +495,30 @@ private class LocalNotebookSession(
             )
             pageIo.commit(PageSnapshot(page, emptyList()))
             updateManifest(current.copy(pageCount = current.pageCount + 1, pageOrder = current.pageOrder + id))
+        }
+    }
+
+    override suspend fun deleteTemplatePage(pageId: PageId) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = mutableManifest.value
+            require(current.kind == NotebookKind.TEMPLATE) { "Only template notebooks support page deletion" }
+            require(current.pageCount > 1) { "Cannot delete the last page" }
+            require(pageId.value in current.pageOrder) { "Page ${pageId.value} is absent" }
+            val victim = pageIo.read(pageId.value)
+            require(victim.strokes.isEmpty() && victim.page.cards.isEmpty()) { "Only blank pages can be deleted" }
+            val nextOrder = current.pageOrder.filterNot { it == pageId.value }
+            // Reindex first: a crash here leaves stale indexes under the old manifest, which open() repairs.
+            nextOrder.forEachIndexed { newIndex, id ->
+                val oldIndex = current.pageOrder.indexOf(id)
+                if (newIndex != oldIndex) {
+                    val snapshot = pageIo.read(id)
+                    pageIo.commit(snapshot.copy(page = snapshot.page.copy(index = newIndex)))
+                }
+            }
+            // Manifest commit is the atomic boundary: both sides are independently consistent.
+            updateManifest(current.copy(pageCount = nextOrder.size, pageOrder = nextOrder))
+            victim.page.cards.forEach { card -> Files.deleteIfExists(notebookDir.resolve(card.thumbPath)) }
+            pageIo.delete(pageId.value)
         }
     }
 

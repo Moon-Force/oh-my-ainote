@@ -1,8 +1,10 @@
 package com.moonforce.ohmyainote.ui.editor
 
+import android.content.Intent
 import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.core.content.FileProvider
 import androidx.ink.strokes.Stroke
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,10 +26,12 @@ import com.moonforce.ohmyainote.ink.StrokeBridge
 import com.moonforce.ohmyainote.ink.Tool
 import com.moonforce.ohmyainote.ink.eraseIntersectingStrokes
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.UUID
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +74,7 @@ class EditorViewModel(
     private val redo = ArrayDeque<EditorAction>()
     private val persistenceJobs = mutableSetOf<Job>()
     private val persistenceMutex = Mutex()
+    private var coverRefreshJob: Job? = null
     private var pendingQuestion: String? = null
     private var loadGeneration = 0
     private var penColorArgb = BrushCatalog.defaultColor(Tool.PEN)
@@ -165,6 +170,7 @@ class EditorViewModel(
         mutableState.update { it.copy(lastDryHandoffMs = (System.nanoTime() - started) / 1_000_000.0) }
         push(EditorAction.Add(snapshot.page.id, records))
         persist { session.appendStrokes(PageId(snapshot.page.id), records) }
+        maybeScheduleCover(snapshot.page.id)
     }
 
     fun eraseSegment(previousX: Float, previousY: Float, currentX: Float, currentY: Float) {
@@ -178,6 +184,7 @@ class EditorViewModel(
         applyLocalStrokes(records, finished)
         push(EditorAction.Remove(snapshot.page.id, removed))
         persist { session.removeStrokes(PageId(snapshot.page.id), ids) }
+        maybeScheduleCover(snapshot.page.id)
     }
 
     fun selectForAsk(selection: PageRect) {
@@ -264,6 +271,7 @@ class EditorViewModel(
         mutableState.update { it.copy(snapshot = snapshot.copy(page = nextPage), overlay = null) }
         push(EditorAction.InsertCard(snapshot.page.id, card))
         persist { session.insertCard(PageId(snapshot.page.id), card) }
+        maybeScheduleCover(snapshot.page.id)
     }
 
     fun closeOverlay() = mutableState.update { it.copy(overlay = null, tool = Tool.PEN) }
@@ -296,6 +304,7 @@ class EditorViewModel(
                     if (reverse) session.deleteCard(PageId(action.pageId), action.card.id)
                     else session.insertCard(PageId(action.pageId), action.card)
                 }
+                maybeScheduleCover(action.pageId)
             }
         }
     }
@@ -340,10 +349,77 @@ class EditorViewModel(
         viewModelScope.launch {
             runCatching {
                 awaitPersistence()
+                coverRefreshJob?.cancel()
                 updateCover()
             }
             onClosed()
         }
+    }
+
+    fun deleteTemplatePage() {
+        val current = mutableState.value
+        val manifest = current.manifest ?: return
+        val pageIndex = current.pageIndex
+        viewModelScope.launch {
+            runCatching {
+                awaitPersistence()
+                val pageId = PageId(manifest.pageOrder[pageIndex])
+                session.deleteTemplatePage(pageId)
+                val next = session.manifest.value
+                mutableState.update { it.copy(manifest = next) }
+                maybeScheduleCover(next.pageOrder.first())
+                loadPage(pageIndex.coerceIn(0, next.pageCount - 1))
+            }.onFailure(::report)
+        }
+    }
+
+    fun sharePdf() = viewModelScope.launch {
+        val manifest = mutableState.value.manifest ?: return@launch
+        mutableState.update { it.copy(busyMessage = "正在准备分享 PDF…", error = null) }
+        val target = shareStagingDir().resolve("share-${UUID.randomUUID()}.pdf")
+        runCatching {
+            awaitPersistence()
+            val pressure = container.aiSettingsStore.exportPressureVarying.first()
+            container.exporter.export(
+                manifest,
+                notebookDir,
+                target,
+                pageProvider = { session.page(PageId(it)) },
+                options = ExportOptions(pressureVarying = pressure, producer = "oh-my-ainote ${com.moonforce.ohmyainote.BuildConfig.VERSION_NAME}"),
+            )
+            sendShareIntent(target, "application/pdf")
+        }.onFailure(::report)
+        mutableState.update { it.copy(busyMessage = null) }
+    }
+
+    fun sharePackage() = viewModelScope.launch {
+        mutableState.update { it.copy(busyMessage = "正在准备分享 .ainote…", error = null) }
+        val target = shareStagingDir().resolve("share-${UUID.randomUUID()}.ainote")
+        runCatching {
+            awaitPersistence()
+            container.notebookStore.packageToAinote(notebookId, Sink(target))
+            sendShareIntent(target, "application/zip")
+        }.onFailure(::report)
+        mutableState.update { it.copy(busyMessage = null) }
+    }
+
+    private fun shareStagingDir(): Path {
+        val dir = container.context.cacheDir.toPath().resolve("exports")
+        Files.createDirectories(dir)
+        return dir
+    }
+
+    private fun sendShareIntent(file: Path, mimeType: String) {
+        val context = container.context
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file.toFile())
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(intent, "分享")
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
     }
 
     fun exportPdf(uri: Uri) = viewModelScope.launch {
@@ -415,6 +491,17 @@ class EditorViewModel(
     }
 
     private suspend fun awaitPersistence() = persistenceJobs.toList().joinAll()
+
+    /** Debounce a cover refresh for 5 s after the first page changes; close() flushes immediately. */
+    private fun maybeScheduleCover(pageId: String) {
+        val manifest = mutableState.value.manifest ?: return
+        if (pageId != manifest.pageOrder.first()) return
+        coverRefreshJob?.cancel()
+        coverRefreshJob = viewModelScope.launch {
+            delay(5_000)
+            runCatching { updateCover() }
+        }
+    }
 
     private suspend fun updateCover() {
         val manifest = mutableState.value.manifest ?: return

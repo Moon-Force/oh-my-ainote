@@ -39,6 +39,7 @@ interface NotebookSession {
     suspend fun insertCard(pageId: PageId, card: AiCardRecord)
     suspend fun deleteCard(pageId: PageId, cardId: String)
     suspend fun addTemplatePage()
+    suspend fun deleteTemplatePage(pageId: PageId)
     suspend fun addImagePage(image: SourceFile)
     suspend fun rename(title: String)
 }

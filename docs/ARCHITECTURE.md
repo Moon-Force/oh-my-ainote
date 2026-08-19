@@ -20,7 +20,9 @@
 - 书写：唯一 `InProgressStrokes` → `OMA_PRESSURE_INK_V1`（官方 `pressurePen` + 仅触控笔的阻尼宽度/浓淡行为）→ page-space `Stroke` → 同步湿墨/干墨交接 → 串行页面提交。
 - 提问：框选 page-space 矩形 → 背景、干墨和卡片合成 JPEG → 首次目标确认 → OpenAI 兼容 `/chat/completions` → 内存浮层；只有 Insert 才写页目录。
 - 导出：等待当前写队列 → PdfBox-Android 按版本化笔刷曲线重放线宽/透明度并逐页追加或生成内容 → 临时 PDF 原子提升 → SAF 输出流。
-- 分享包：工作目录 ZIP 为 `.ainote`；导入校验路径和格式后总是分配新 UUID，不覆盖现有笔记。
+- 分享：隐私确认 → 导出到 `cacheDir/exports/`（已映射 FileProvider）→ `ACTION_SEND` + 读权限 grant 送出 PDF / `.ainote`；不注册 MIME/`SEND` intent-filter。
+- 删页：仅模板本空白页、至少保留 1 页；重排剩余页 `index` → 原子写 manifest → 删页目录与卡片媒体，`open` 时清孤儿并修复陈旧索引。
+- 卡片展开：手指轻点卡片锚点（≤16 px 位移）弹出只读全文；不新增 pointer 层，复用 `routeEditorPointers` 触摸通道。
 
 ## Editor layers
 

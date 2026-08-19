@@ -82,7 +82,9 @@ for each stroke:
 
 打包时不包含 `tmp/`、`.bak` 或其他恢复中间态。`media/cover.jpg` 可以随工作目录存在，但阅读器不得依赖它打开笔记；缺失时由客户端重建。
 
-单页提交单位是整个页目录。已有页更新流程：`live -> live.bak`，`tmp -> live`，验证后删除 `.bak`。若仅有 `.bak` 则恢复旧页；live 与 `.bak` 同在且 live 有效时保留 live；live 损坏时尝试有效 `.bak`。
+ 单页提交单位是整个页目录。已有页更新流程：`live -> live.bak`，`tmp -> live`，验证后删除 `.bak`。若仅有 `.bak` 则恢复旧页；live 与 `.bak` 同在且 live 有效时保留 live；live 损坏时尝试有效 `.bak`。
+
+ 删除模板页（v1 仅限 `kind=template` 的空白页，至少保留 1 页）按以下顺序提交：先逐个重排剩余页的 `index`（每页一次页目录提交），再原子写入新 `manifest.json`，最后删除被删页目录及其卡片媒体。manifest 写入是原子边界：重排完成前崩溃，`open` 按旧 manifest 把陈旧 `index` 重排回去；manifest 写入后、删目录前崩溃，`open` 删除不在 `pageOrder` 中的孤儿页目录。`page.json` 的 `index` 必须始终等于 `pageOrder` 中的位置。
 
 ## PencilKit mapping
 

@@ -324,6 +324,7 @@ internal fun PageControls(
     onNext: () -> Unit,
     onFit: () -> Unit,
     onAddPage: (() -> Unit)?,
+    onDeletePage: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -348,6 +349,11 @@ internal fun PageControls(
             onAddPage?.let {
                 IconButton(onClick = it) {
                     Icon(painterResource(R.drawable.ic_add), contentDescription = "加页")
+                }
+            }
+            onDeletePage?.let {
+                IconButton(onClick = it, enabled = pageCount > 1) {
+                    Icon(painterResource(R.drawable.ic_delete), contentDescription = "删除当前空白页")
                 }
             }
         }

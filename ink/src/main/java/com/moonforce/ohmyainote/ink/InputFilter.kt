@@ -16,7 +16,10 @@ fun Modifier.routeEditorPointers(
     onEraser: (PointerEvent) -> Unit = {},
     onInterceptedStylus: (PointerEvent) -> Unit = {},
     onStylusActiveChanged: (Boolean) -> Unit = {},
-): Modifier = pointerInput(interceptStylus, onTouch, onEraser, onInterceptedStylus, onStylusActiveChanged) {
+    onStylusMove: (Long) -> Unit = {},
+): Modifier = pointerInput(
+    interceptStylus, onTouch, onEraser, onInterceptedStylus, onStylusActiveChanged, onStylusMove,
+) {
     awaitPointerEventScope {
         var stylusActive = false
         while (true) {
@@ -40,6 +43,8 @@ fun Modifier.routeEditorPointers(
             if (interceptStylus && stylusChanges.isNotEmpty()) {
                 onInterceptedStylus(event)
                 stylusChanges.forEach { it.consume() }
+            } else if (stylusChanges.any { it.pressed }) {
+                onStylusMove(System.nanoTime())
             }
         }
     }
