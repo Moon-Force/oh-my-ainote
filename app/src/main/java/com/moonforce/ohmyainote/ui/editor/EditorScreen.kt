@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -100,6 +101,8 @@ fun EditorScreen(
     var showOverflowMenu by remember { mutableStateOf(false) }
     var lastWetMoveNanos by remember { mutableLongStateOf(0L) }
     var lastMoveToFrameMs by remember { mutableFloatStateOf(0f) }
+    val tileProvider = remember(viewModel) { PdfTileProvider() }
+    DisposableEffect(tileProvider) { onDispose { tileProvider.close() } }
     val pdfExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         uri?.let(viewModel::exportPdf)
     }
@@ -317,7 +320,15 @@ fun EditorScreen(
                     ) { pageIndex ->
                         if (snapshot != null && pageIndex == state.pageIndex && manifest != null) {
                             Box(Modifier.fillMaxSize()) {
-                                BackgroundLayer(manifest, snapshot, notebookDir = viewModel.notebookDirectory, viewport = viewport)
+                                BackgroundLayer(
+                                    manifest,
+                                    snapshot,
+                                    notebookDir = viewModel.notebookDirectory,
+                                    viewport = viewport,
+                                    viewSize = viewSize,
+                                    tileProvider = tileProvider,
+                                    pageCount = manifest.pageCount,
+                                )
                                 FinishedStrokesLayer(state.finishedStrokes, viewport)
                                 AiCardLayer(snapshot, viewModel.notebookDirectory, viewport)
                             }
@@ -354,7 +365,7 @@ fun EditorScreen(
                         val handoff = state.lastDryHandoffMs?.let { "%.2f".format(it) } ?: "—"
                         val moveFrame = if (lastWetMoveNanos > 0L) "%.2f".format(lastMoveToFrameMs) else "—"
                         Text(
-                            "dry handoff ${handoff} ms · move→frame ${moveFrame} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · page bitmaps ≤1 · tiles n/a",
+                            "dry handoff ${handoff} ms · move→frame ${moveFrame} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · tiles ${tileProvider.tileCount} · tile cache ${"%.1f".format(tileProvider.cacheBytes / 1048576f)} MB",
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xB0000000)).padding(6.dp),

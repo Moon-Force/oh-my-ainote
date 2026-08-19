@@ -42,9 +42,9 @@
 
 ## Memory bounds
 
-编辑器当前只解码当前页的 Ink mesh 和一个 fit 位图；`:pdf` 提供双渲染器、相邻页预取控制器与 96 MB tile LRU，后续性能调优可接入而不改变文档格式。`NotebookSession` 不常驻整本解码后的笔画，因此页数增长不会线性占用 mesh 内存。
+编辑器解码当前页的 Ink mesh 与 PDF 瓦片；`:pdf` 提供双渲染器、相邻页预取控制器与 96 MB tile LRU。`NotebookSession` 不常驻整本解码后的笔画，因此页数增长不会线性占用 mesh 内存。
 
-当前 UI 尚未消费 `PrefetchController`/`TileCache`；PDF 背景按 scale bucket 重新生成当前页位图，最长边限制为 4096。这个边界必须用 `MANUAL_TEST.md` 的 40/200 页与高倍缩放条目验证，不能仅依据类已经存在就声称瓦片方案已交付。
+PDF 背景已接入瓦片渲染：`PdfTileProvider` 持有按源文件复用的 `PdfPageRenderer` 与共享 96 MB `TileCache`，按 scale bucket 只渲染视口可见的 512×512 瓦片（外加 1 瓦片边距），并用 `pageInfo` 的渲染器页尺寸做 per-axis 校正，保证与整页渲染对齐；`close()` 关闭渲染器并清缓存。翻页时以同视口预热相邻 ±1 页瓦片。高倍缩放因此不再受单张 4096 位图上限约束而发糊。内存随翻页收敛（真机 40 页翻满 Graphics 稳定在 ~340 MB、TOTAL PSS ~450 MB），仍需 `MANUAL_TEST.md` 的 4×/8× 清晰度与瓦片接缝条目人工确认。
 
 页面背景、AI 卡片缩略图和书架封面的解码位图由 Compose state 持有并随引用释放；UI 层不得在 `DisposableEffect` 中手动 `Bitmap.recycle()`，因为 Canvas / `BitmapPainter` 可能仍在当前帧使用该对象。导出器内部的短命位图不受此 UI 约束，仍在单页写出后立即释放。
 

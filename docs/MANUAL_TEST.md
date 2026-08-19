@@ -51,8 +51,10 @@
 - 封面 5 s 防抖：manifest 落盘与 `cover.jpg` mtime 差 5.14 s。
 - 200 页内存：翻满无 OOM，PSS 289→540MB。
 - 旋转 CropBox 导出对齐：结构级逐页几何一致 + 内容流逐字节内嵌。
+- PDF 瓦片渲染：40 页 PDF 翻满（1→40）无崩溃 / 无 OOM，性能浮层显示 `tiles 96 · tile cache 96.0 MB`，内存收敛——Graphics 稳定 ~340 MB、TOTAL PSS ~450 MB，page 21 与 page 40 持平（不随页数线性增长，非泄漏）。
 
 留待人工（需真笔 / API Key / 目标 App，ADB 无法模拟）：
 - USI 湿墨延迟、掌拒、轻/中/重压感线宽浓淡、快速转向、慢速收笔、20 笔转干不跳变（用户在 rotated-cropbox p3 已手写钢笔+荧光笔墨迹，作为湿墨存在的人工证据）。
 - AI 卡片点按展开、框选 AI 问答、无 Key/错 Key/超时错误文案（需 API Key 与已插入卡片）。
 - 双指 pinch 缩放、图片 EXIF、SAF 图片导入、`.ainote` 往返、目标 App 打开分享文件后卡片可见。
+- 4×/8× 高倍缩放下 PDF 文字清晰度与瓦片接缝：需人工 pinch 放大到 4×/8× 肉眼确认无发糊、瓦片间无可见接缝（ADB 无法双指 pinch，本设备 `screencap` 损坏无法截图比对）。

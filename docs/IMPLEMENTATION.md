@@ -56,12 +56,12 @@
 
 | 项目 | 当前实现 | 后续条件 |
 | --- | --- | --- |
-| PDF 高倍瓦片 / ±1 预取 | `TileCache`、`PrefetchController` 和双 renderer 已实现；编辑器当前仅显示当前页单张位图（最长边 4096） | 200 页与 4×/8× 失败则必须在 v1 发布前接入；即使通过，也应单独性能评审 |
+| PDF 高倍瓦片 / ±1 预取 | 已接入：`PdfTileProvider` 按 scale bucket 渲染视口可见 512×512 瓦片（`TileCache` 96 MB LRU、按源文件复用 `PdfPageRenderer`），翻页同视口预热相邻 ±1 页；高倍缩放不再受单张 4096 上限约束 | 真机 40 页翻满无 OOM、内存收敛（Graphics ~340 MB / PSS ~450 MB）；4×/8× 清晰度与瓦片接缝待人工 pinch + 肉眼确认 |
 | 模板页管理 | 支持追加与删除空白页（至少保留 1 页），删页走同一崩溃安全页提交并可在 `open` 时重排/清孤儿 | 已完成；真机验收通过（加页/删页重排/末页守卫/杀进程重开一致） |
 | 封面刷新 | 首页变更 5 s 防抖生成最长边 512 JPEG，退出编辑器立即 flush | 已完成 |
 | AI 卡片 | 可显示、持久化、导出和随包往返；点按卡片只读展开全文（问题、回答、model、时间） | 已完成 |
 | 导出分享 | SAF `CreateDocument` 可导出，另有 FileProvider Sharesheet 分享 PDF / `.ainote`，均有隐私确认 | 已完成；真机分享面板拉起通过，目标 App 打开留待人工 |
-| Debug 性能浮层 | 顶部更多菜单可开关 dry handoff、move→frame、scale、mesh 和位图上限 | move→frame 已测量；tile cache 数据待瓦片接入后显示 |
+| Debug 性能浮层 | 顶部更多菜单可开关 dry handoff、move→frame、scale、mesh 和位图上限 | move→frame 已测量；tile cache 显示 `TileCache` 真实瓦片数与缓存 MB（真机 `tiles 96 · tile cache 96.0 MB`） |
 | Observability | 默认无远程日志/崩溃上报 | Timber 与可选 ACRA/Sentry 未接入；这不改变隐私边界 |
 
 其中“模板删页”是功能差异；PDF 瓦片是否成为发布阻断由目标设备的长 PDF 验收决定。其余项目不影响 `.ainote` v1 兼容性。
@@ -78,7 +78,8 @@
 - AI 卡片：手指轻点卡片区域（≤16 px 位移判为 tap）弹出只读全文对话框；不新增 pointer 层，走既有 `routeEditorPointers` 触摸通道，不影响湿墨。
 - 分享：更多菜单新增「分享 PDF / 分享 .ainote」，复用隐私确认文案，导出到 `cacheDir/exports/`（已映射 FileProvider），`ACTION_SEND` + `FLAG_GRANT_READ_URI_PERMISSION` 送出；未注册任何 MIME/`SEND` intent-filter。
 - 封面：首页墨迹/卡片变更 5 s 防抖重新生成，`close()` 取消防抖并立即 flush，与 DESIGN.md:969 对齐。
-- 性能浮层：`routeEditorPointers` 新增 `onStylusMove` 时间戳回调（仅未拦截的书写笔触），`withFrameNanos` 采样最后 move→frame 延迟；tile cache 列显示 `n/a`，待瓦片接入后替换为真实数据。
+- 性能浮层：`routeEditorPointers` 新增 `onStylusMove` 时间戳回调（仅未拦截的书写笔触），`withFrameNanos` 采样最后 move→frame 延迟；tile cache 列显示 `TileCache` 真实瓦片数与缓存 MB。
+- PDF 瓦片：新建 `PdfTileProvider`（按源文件复用 `PdfPageRenderer` 池 + 共享 96 MB `TileCache` + per-page `pageInfo` per-axis 校正）；`PageLayers.BackgroundLayer` 的 PDF 分支由「整页单张位图（上限 4096）」改为按 scale bucket 渲染视口可见 512×512 瓦片 + 翻页同视口预热相邻 ±1 页；`EditorScreen` 以 `remember + DisposableEffect` 管理 provider 生命周期并在浮层显示 tile 统计。
 - 验证：`:document:test`（12 例）与 `:ai-api:test`（1 例）以直接 JUnit 方式通过（中文路径 Test Worker 限制见 `BUILDING.md`）；`assembleDebug` 通过。
 
 ## 2026-08-19 device gate pass（真机，PR-18）

@@ -985,7 +985,7 @@ v1 选 **PdfRenderer**。若验收机上 4× 缩放文字不可读，再开评�
 
 ### 7.2 栅格与瓦片
 
-> r7 实现说明：双 `PdfRenderer`、`TileCache` 和 `PrefetchController` 已存在，但编辑器目前只接入“当前页单张、最长边上限 4096”的位图路径，尚未把高倍 512×512 瓦片与相邻页预取接入 UI。本节仍是 v1 性能目标；40/200 页与 4×/8× 验收未通过前不得宣称完成。
+> r7 实现说明：PDF 背景已按本节接入瓦片——`PdfTileProvider` 用 `scaleBucket`（1.25/2/4/8）只渲染视口可见 512×512 瓦片（key = `notebookId/pageIndex/scaleBucket/tx/ty`）+ 翻页同视口预热相邻 ±1 页，LRU 上限 96 MB，per-axis 校正对齐整页。40 页翻满真机无 OOM、内存收敛；4×/8× 清晰度与瓦片接缝留待人工 pinch 确认前，本节的“高倍不发糊”仍视为待验收。
 
 - **Fit-width / ≤ 1.25×**：为当前页生成一张 **视口大小** 的 `ARGB_8888`（不是 PDF 点阵 1:1）。典型 11" 2560×1600 全屏约 **16 MB**。
 - **> 1.25×**：切 **512×512** 瓦片，按 `clip + Matrix` 渲染可见瓦片 + 一圈预取。瓦片 key = `(notebookId, pageIndex, scaleBucket, tx, ty)`。
