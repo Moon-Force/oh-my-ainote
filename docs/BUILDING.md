@@ -10,6 +10,7 @@
 | Android SDK Platform | 36 |
 | Android SDK Build Tools | 36.0.0 |
 | Gradle | 使用仓库自带 Wrapper 8.11.1，无需单独安装 |
+| AndroidX Ink | 1.1.0-alpha07（由 version catalog 精确钉扎） |
 | Git | 任意仍受支持的版本 |
 
 工程的 `minSdk=29`、`targetSdk=36`、`compileSdk=36`。首次构建需要联网从 Google Maven 和 Maven Central 下载依赖。
@@ -256,6 +257,19 @@ subst R: /d
 ```
 
 映射只改变构建时路径，不修改源码或 APK。
+
+### `libink.so` 无法 strip
+
+先看整个 Gradle 任务的最终结果。AndroidX Ink 1.1.0-alpha07 带来的部分原生库会让 `stripDebugDebugSymbols` / `stripReleaseDebugSymbols` 输出 `Unable to strip ... packaging them as they are`。若后续 `assembleDebug` 或 `assembleRelease` 最终是 `BUILD SUCCESSFUL`，这只表示 AGP 保留并按原样打包已发布的 `.so`，不是构建失败。
+
+当前 Ink 1.1.0-alpha07 的 debug 与 release/R8 构建均已验证成功，APK 包含 `arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64` 四种 ABI 的 `libink.so`。可用以下命令核对：
+
+```powershell
+tar -tf app/build/outputs/apk/debug/app-debug.apk | Select-String 'lib/.*/libink.so'
+tar -tf app/build/outputs/apk/release/app-release-unsigned.apk | Select-String 'lib/.*/libink.so'
+```
+
+只有 Gradle 任务真正失败、APK 没有生成，或目标 ABI 的 `libink.so` 缺失时，才按 SDK Build Tools / JDK / Gradle 缓存方向排查。不要手工替换 `libink.so`。
 
 ### 首次构建下载超时
 

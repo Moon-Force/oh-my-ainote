@@ -13,6 +13,7 @@ import com.moonforce.ohmyainote.document.format.pageToPdfUserSpace
 import com.moonforce.ohmyainote.document.model.AiCardRecord
 import com.moonforce.ohmyainote.document.model.NotebookKind
 import com.moonforce.ohmyainote.document.model.NotebookManifest
+import com.moonforce.ohmyainote.document.model.OmaPressureInkV1
 import com.moonforce.ohmyainote.document.model.PageBackground
 import com.moonforce.ohmyainote.document.model.PagePoint
 import com.moonforce.ohmyainote.document.model.PageSnapshot
@@ -34,6 +35,7 @@ import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.UUID
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -144,21 +146,47 @@ class FlattenedPdfExporter {
             is PageBackground.PdfPage -> { point -> pageToPdfUserSpace(point, background.cropBox, background.rotate) }
             else -> { point -> pageToPdfUserSpace(point, PdfRect(0f, 0f, snapshot.page.widthPt, snapshot.page.heightPt), 0) }
         }
+        val alphaStates = mutableMapOf<Int, PDExtendedGraphicsState>()
+        fun setAlpha(alpha: Float) {
+            val level = (alpha.coerceIn(0f, 1f) * 31f).roundToInt()
+            val state = alphaStates.getOrPut(level) {
+                PDExtendedGraphicsState().apply { strokingAlphaConstant = level / 31f }
+            }
+            stream.setGraphicsStateParameters(state)
+        }
         snapshot.strokes.forEach { stroke ->
             if (stroke.points.isEmpty()) return@forEach
             val color = Color.parseColor(stroke.color)
             val alpha = if (stroke.stockBrush == StockBrush.HIGHLIGHTER) 0.35f else Color.alpha(color) / 255f
             stream.saveGraphicsState()
-            stream.setGraphicsStateParameters(PDExtendedGraphicsState().apply { strokingAlphaConstant = alpha })
+            setAlpha(alpha)
             stream.setStrokingColor(Color.red(color), Color.green(color), Color.blue(color))
             stream.setLineCapStyle(1)
             stream.setLineJoinStyle(1)
             if (stroke.points.size == 1) {
-                val point = transform(PagePoint(stroke.points[0].x, stroke.points[0].y))
-                stream.setLineWidth(stroke.sizePt)
+                val input = stroke.points[0]
+                val point = transform(PagePoint(input.x, input.y))
+                val pressure = input.pressure ?: 1f
+                if (pressureVarying && stroke.stockBrush == StockBrush.OMA_PRESSURE_INK_V1) {
+                    setAlpha(alpha * OmaPressureInkV1.opacityMultiplier(pressure))
+                    stream.setLineWidth(max(0.1f, stroke.sizePt * OmaPressureInkV1.widthMultiplier(pressure)))
+                } else {
+                    stream.setLineWidth(stroke.sizePt)
+                }
                 stream.moveTo(point.x, point.y)
                 stream.lineTo(point.x + 0.01f, point.y + 0.01f)
                 stream.stroke()
+            } else if (pressureVarying && stroke.stockBrush == StockBrush.OMA_PRESSURE_INK_V1) {
+                stroke.points.zipWithNext().forEach { (from, to) ->
+                    val a = transform(PagePoint(from.x, from.y))
+                    val b = transform(PagePoint(to.x, to.y))
+                    val pressure = listOfNotNull(from.pressure, to.pressure).averageOrNull() ?: 1f
+                    setAlpha(alpha * OmaPressureInkV1.opacityMultiplier(pressure))
+                    stream.setLineWidth(max(0.1f, stroke.sizePt * OmaPressureInkV1.widthMultiplier(pressure)))
+                    stream.moveTo(a.x, a.y)
+                    stream.lineTo(b.x, b.y)
+                    stream.stroke()
+                }
             } else if (pressureVarying && stroke.stockBrush == StockBrush.PRESSURE_PEN) {
                 stroke.points.zipWithNext().forEach { (from, to) ->
                     val a = transform(PagePoint(from.x, from.y))

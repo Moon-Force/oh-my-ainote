@@ -68,7 +68,7 @@ internal class PageDirectoryIo(
 
     fun read(pageId: String): PageSnapshot {
         val live = recover(pageId)
-        val page = PageCodec.decode(Files.readString(live.resolve("page.json")))
+        val page = PageCodec.decode(readUtf8(live.resolve("page.json")))
         val strokes = OmaInputsV1.decode(Files.readAllBytes(live.resolve("strokes.bin")), page.strokes)
         return PageSnapshot(page, strokes)
     }
@@ -104,7 +104,7 @@ internal class PageDirectoryIo(
 
     private fun isValid(directory: Path): Boolean = runCatching {
         if (!Files.isDirectory(directory)) return@runCatching false
-        val page = PageCodec.decode(Files.readString(directory.resolve("page.json")))
+        val page = PageCodec.decode(readUtf8(directory.resolve("page.json")))
         OmaInputsV1.decode(Files.readAllBytes(directory.resolve("strokes.bin")), page.strokes)
         true
     }.getOrDefault(false)
@@ -138,7 +138,7 @@ internal class AtomicTextFile(private val root: Path) {
         val backup = target.resolveSibling("${target.fileName}.bak")
         fun valid(path: Path): String? = runCatching {
             if (!Files.isRegularFile(path)) return@runCatching null
-            Files.readString(path).also(validator)
+            readUtf8(path).also(validator)
         }.getOrNull()
 
         val live = valid(target)
@@ -152,6 +152,8 @@ internal class AtomicTextFile(private val root: Path) {
         return old
     }
 }
+
+private fun readUtf8(path: Path): String = String(Files.readAllBytes(path), StandardCharsets.UTF_8)
 
 private fun writeAndForce(path: Path, bytes: ByteArray) {
     FileChannel.open(path, CREATE, WRITE, TRUNCATE_EXISTING).use { channel ->

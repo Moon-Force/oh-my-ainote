@@ -32,7 +32,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
@@ -188,7 +187,6 @@ private fun NotebookCard(
     val cover by produceState<Bitmap?>(null, coverPath, notebook.updatedAt) {
         value = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(coverPath) }
     }
-    DisposableEffect(cover) { onDispose { cover?.recycle() } }
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             cover?.let { bitmap ->

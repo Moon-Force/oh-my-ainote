@@ -43,7 +43,13 @@ pages/{pageId}/strokes.bin
 
 页面保存 `id/index/widthPt/heightPt/background/strokes/cards`。PDF 背景必须同时保存 `sourcePath/pdfPageIndex/rotate/mediaBox/cropBox`。`rotate` 只能是 0、90、180、270。
 
-笔画元数据保存 UUID、工具、stock brush、ARGB、size、epsilon、起始时间、二进制 offset/length、point count 与 AABB。AABB 仅用于整笔橡皮粗筛。
+笔画元数据保存 UUID、工具、brush ID、ARGB、size、epsilon、起始时间、二进制 offset/length、point count 与 AABB。AABB 仅用于整笔橡皮粗筛。`stockBrush` 字段保留历史命名，v1 允许：
+
+- `PRESSURE_PEN`：旧笔迹，按 AndroidX Ink 官方 `pressurePen` 原样重建。
+- `OMA_PRESSURE_INK_V1`：当前钢笔；以 Ink 1.1.0-alpha07 官方 `pressurePen` 为基底，保留其预测、收笔、速度、方向和高压变宽行为，再追加仅触控笔生效的 30 ms 压力阻尼。压力 `p` 在 `[0,0.8]` 时宽度倍率从 `0.55` 线性到 `1.0`，在 `(0.8,1]` 时沿官方曲线从 `1.0` 到 `1.5`；不透明度倍率在 `[0,1]` 从 `0.35` 线性到 `1.0`。缺失压力按倍率 `1.0`。
+- `HIGHLIGHTER`：官方荧光笔。
+
+笔刷 ID 是持久化语义，不得把自定义笔刷冒充 `PRESSURE_PEN`；后续调整曲线必须新增版本化 ID。
 
 已插入卡片保存绑定选区、固定 anchor、问答、缩略图路径、model 与创建时间。未插入 AI 浮层不属于格式。
 

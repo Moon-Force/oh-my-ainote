@@ -8,7 +8,6 @@ import android.graphics.RectF
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
@@ -63,8 +62,6 @@ fun BackgroundLayer(
             }
         }
     }
-    DisposableEffect(bitmap) { onDispose { bitmap?.recycle() } }
-
     Canvas(modifier.fillMaxSize()) {
         val native = drawContext.canvas.nativeCanvas
         val pageToView = viewport.pageToView
@@ -116,8 +113,6 @@ fun AiCardLayer(snapshot: PageSnapshot, notebookDir: Path, viewport: ViewportSta
             }.toMap()
         }
     }
-    DisposableEffect(thumbnails) { onDispose { thumbnails.values.forEach(Bitmap::recycle) } }
-
     Canvas(modifier.fillMaxSize()) {
         val canvas = drawContext.canvas.nativeCanvas
         canvas.save()

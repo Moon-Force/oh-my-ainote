@@ -13,13 +13,14 @@ fun AuthoringSurface(
     viewport: ViewportState,
     tool: Tool,
     colorArgb: Int = BrushCatalog.defaultColor(tool),
+    sizePt: Float = BrushCatalog.defaultSize(tool),
     maskPath: Path? = null,
     modifier: Modifier = Modifier,
     onStrokesFinished: (List<Stroke>) -> Unit,
 ) {
     Box(modifier = modifier) {
         InProgressStrokes(
-            defaultBrush = BrushCatalog.create(tool, colorArgb),
+            defaultBrush = BrushCatalog.create(tool, colorArgb, sizePt),
             pointerEventToWorldTransform = viewport.viewToPageCompose(),
             maskPath = maskPath,
             onStrokesFinished = onStrokesFinished,

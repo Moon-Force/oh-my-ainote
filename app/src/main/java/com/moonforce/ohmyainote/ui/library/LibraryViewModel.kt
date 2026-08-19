@@ -2,6 +2,7 @@ package com.moonforce.ohmyainote.ui.library
 
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.moonforce.ohmyainote.di.AppContainer
@@ -140,7 +141,10 @@ class LibraryViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             mutableState.update { it.copy(loading = true, error = null) }
             runCatching { block() }
-                .onFailure { failure -> mutableState.update { it.copy(error = failure.message ?: "操作失败") } }
+                .onFailure { failure ->
+                    Log.w("LibraryVM", "refresh failed", failure)
+                    mutableState.update { it.copy(error = failure.message ?: "操作失败") }
+                }
             mutableState.update { it.copy(loading = false) }
         }
     }

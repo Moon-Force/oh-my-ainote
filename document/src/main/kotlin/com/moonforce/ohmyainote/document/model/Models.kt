@@ -43,7 +43,32 @@ enum class StrokeTool {
 }
 
 @Serializable
-enum class StockBrush { PRESSURE_PEN, HIGHLIGHTER }
+enum class StockBrush { PRESSURE_PEN, OMA_PRESSURE_INK_V1, HIGHLIGHTER }
+
+/** Persisted pressure/opacity curve for [StockBrush.OMA_PRESSURE_INK_V1]. */
+object OmaPressureInkV1 {
+    const val LOW_PRESSURE_END = 0.8f
+    const val MIN_WIDTH_MULTIPLIER = 0.55f
+    const val MAX_WIDTH_MULTIPLIER = 1.5f
+    const val MIN_OPACITY_MULTIPLIER = 0.35f
+    const val DAMPING_GAP_SECONDS = 0.03f
+
+    fun widthMultiplier(pressure: Float): Float {
+        val normalized = pressure.coerceIn(0f, 1f)
+        return if (normalized <= LOW_PRESSURE_END) {
+            MIN_WIDTH_MULTIPLIER +
+                (1f - MIN_WIDTH_MULTIPLIER) * normalized / LOW_PRESSURE_END
+        } else {
+            1f +
+                (MAX_WIDTH_MULTIPLIER - 1f) *
+                (normalized - LOW_PRESSURE_END) / (1f - LOW_PRESSURE_END)
+        }
+    }
+
+    fun opacityMultiplier(pressure: Float): Float =
+        MIN_OPACITY_MULTIPLIER +
+            (1f - MIN_OPACITY_MULTIPLIER) * pressure.coerceIn(0f, 1f)
+}
 
 @Serializable
 data class PageSpec(

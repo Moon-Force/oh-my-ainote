@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
@@ -19,8 +20,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -38,16 +42,20 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moonforce.ohmyainote.document.model.NotebookKind
+import com.moonforce.ohmyainote.R
 import com.moonforce.ohmyainote.document.model.PagePoint
 import com.moonforce.ohmyainote.document.model.PageRect
 import com.moonforce.ohmyainote.ink.AuthoringSurface
@@ -83,6 +91,7 @@ fun EditorScreen(
     var touchStartX by remember { mutableStateOf<Float?>(null) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     var showPerformance by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
     val pdfExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         uri?.let(viewModel::exportPdf)
     }
@@ -192,96 +201,136 @@ fun EditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(manifest?.title ?: "正在打开…") },
-                navigationIcon = { TextButton(onClick = { viewModel.close(onBack) }) { Text("返回") } },
-                actions = {
-                    Text("${(state.pageIndex + 1).coerceAtMost(manifest?.pageCount ?: 1)}/${manifest?.pageCount ?: 1}")
-                    if (com.moonforce.ohmyainote.BuildConfig.DEBUG) {
-                        TextButton(onClick = { showPerformance = !showPerformance }) { Text("Perf") }
+                title = {
+                    Text(
+                        manifest?.title ?: "正在打开…",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { viewModel.close(onBack) }) {
+                        Icon(painterResource(R.drawable.ic_arrow_back), contentDescription = "返回")
                     }
-                    TextButton(onClick = { pendingExport = "pdf" }) { Text("导出 PDF") }
-                    TextButton(onClick = { pendingExport = "ainote" }) { Text("导出 .ainote") }
                 },
-            )
-        },
-        bottomBar = {
-            EditorToolbar(
-                state = state,
-                onTool = viewModel::setTool,
-                onUndo = viewModel::undo,
-                onRedo = viewModel::redo,
-                onPrevious = {
-                    if (pagerState.currentPage > 0) scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                actions = {
+                    Text(
+                        "${(state.pageIndex + 1).coerceAtMost(manifest?.pageCount ?: 1)} / ${manifest?.pageCount ?: 1}",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Box {
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "更多操作")
+                        }
+                        DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("导出 PDF") },
+                                onClick = { showOverflowMenu = false; pendingExport = "pdf" },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导出 .ainote") },
+                                onClick = { showOverflowMenu = false; pendingExport = "ainote" },
+                            )
+                            if (com.moonforce.ohmyainote.BuildConfig.DEBUG) {
+                                DropdownMenuItem(
+                                    text = { Text(if (showPerformance) "关闭性能信息" else "显示性能信息") },
+                                    onClick = { showOverflowMenu = false; showPerformance = !showPerformance },
+                                )
+                            }
+                        }
+                    }
                 },
-                onNext = {
-                    if (pagerState.currentPage + 1 < pagerState.pageCount) scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
-                },
-                onAddPage = when (manifest?.kind) {
-                    NotebookKind.TEMPLATE -> viewModel::addTemplatePage
-                    NotebookKind.IMAGE -> ({ appendImage.launch("image/*") })
-                    else -> null
-                },
-                onFit = { viewport = viewport.copy(scale = fitScale, panX = 0f, panY = 0f) },
             )
         },
     ) { padding ->
-        Box(
-            Modifier.fillMaxSize().padding(padding).onSizeChanged { viewSize = it }
-                .routeEditorPointers(
-                    interceptStylus = state.tool == Tool.ERASER || state.tool == Tool.BOX_ASK || state.tool == Tool.PAN,
-                    onTouch = ::handleTouch,
-                    onEraser = ::handleEraser,
-                    onInterceptedStylus = ::handleInterceptedStylus,
-                    onStylusActiveChanged = { stylusActive = it },
-                ),
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize(),
-                userScrollEnabled = false,
-                beyondViewportPageCount = 1,
-            ) { pageIndex ->
-                if (snapshot != null && pageIndex == state.pageIndex && manifest != null) {
-                    Box(Modifier.fillMaxSize()) {
-                        BackgroundLayer(manifest, snapshot, notebookDir = viewModel.notebookDirectory, viewport = viewport)
-                        FinishedStrokesLayer(state.finishedStrokes, viewport)
-                        AiCardLayer(snapshot, viewModel.notebookDirectory, viewport)
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            EditorStudioToolbar(
+                state = state,
+                onTool = viewModel::setTool,
+                onColor = viewModel::setBrushColor,
+                onSize = viewModel::setBrushSize,
+                onUndo = viewModel::undo,
+                onRedo = viewModel::redo,
+                modifier = Modifier.fillMaxWidth().height(140.dp),
+            )
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                Box(
+                    Modifier.fillMaxSize().clipToBounds().onSizeChanged { viewSize = it }
+                        .routeEditorPointers(
+                            interceptStylus = state.tool == Tool.ERASER || state.tool == Tool.BOX_ASK || state.tool == Tool.PAN,
+                            onTouch = ::handleTouch,
+                            onEraser = ::handleEraser,
+                            onInterceptedStylus = ::handleInterceptedStylus,
+                            onStylusActiveChanged = { stylusActive = it },
+                        ),
+                ) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        userScrollEnabled = false,
+                        beyondViewportPageCount = 1,
+                    ) { pageIndex ->
+                        if (snapshot != null && pageIndex == state.pageIndex && manifest != null) {
+                            Box(Modifier.fillMaxSize()) {
+                                BackgroundLayer(manifest, snapshot, notebookDir = viewModel.notebookDirectory, viewport = viewport)
+                                FinishedStrokesLayer(state.finishedStrokes, viewport)
+                                AiCardLayer(snapshot, viewModel.notebookDirectory, viewport)
+                            }
+                        }
+                    }
+                    if (snapshot != null) {
+                        AuthoringSurface(
+                            viewport = viewport,
+                            tool = state.tool,
+                            colorArgb = state.colorArgb,
+                            sizePt = state.brushSizePt,
+                            modifier = Modifier.fillMaxSize(),
+                            onStrokesFinished = viewModel::onStrokesFinished,
+                        )
+                    }
+                    if (boxStart != null && boxEnd != null) {
+                        Canvas(Modifier.fillMaxSize()) {
+                            val a = viewport.pageToView.transform(boxStart!!)
+                            val b = viewport.pageToView.transform(boxEnd!!)
+                            drawRect(
+                                Color(0x334285F4),
+                                topLeft = Offset(minOf(a.x, b.x), minOf(a.y, b.y)),
+                                size = androidx.compose.ui.geometry.Size(abs(a.x - b.x), abs(a.y - b.y)),
+                            )
+                        }
+                    }
+                    state.busyMessage?.let { message ->
+                        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator()
+                            Text(message, modifier = Modifier.padding(8.dp))
+                        }
+                    }
+                    if (showPerformance) {
+                        val handoff = state.lastDryHandoffMs?.let { "%.2f".format(it) } ?: "—"
+                        Text(
+                            "dry handoff ${handoff} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · page bitmaps ≤1",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xB0000000)).padding(6.dp),
+                        )
                     }
                 }
-            }
-            if (snapshot != null) {
-                AuthoringSurface(
-                    viewport = viewport,
-                    tool = state.tool,
-                    colorArgb = state.colorArgb,
-                    modifier = Modifier.fillMaxSize(),
-                    onStrokesFinished = viewModel::onStrokesFinished,
-                )
-            }
-            if (boxStart != null && boxEnd != null) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val a = viewport.pageToView.transform(boxStart!!)
-                    val b = viewport.pageToView.transform(boxEnd!!)
-                    drawRect(
-                        Color(0x334285F4),
-                        topLeft = Offset(minOf(a.x, b.x), minOf(a.y, b.y)),
-                        size = androidx.compose.ui.geometry.Size(abs(a.x - b.x), abs(a.y - b.y)),
-                    )
-                }
-            }
-            state.busyMessage?.let { message ->
-                Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
-                    Text(message, modifier = Modifier.padding(8.dp))
-                }
-            }
-            if (showPerformance) {
-                val handoff = state.lastDryHandoffMs?.let { "%.2f".format(it) } ?: "—"
-                Text(
-                    "dry handoff ${handoff} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · page bitmaps ≤1",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xB0000000)).padding(6.dp),
+                PageControls(
+                    pageIndex = state.pageIndex,
+                    pageCount = manifest?.pageCount ?: 1,
+                    onPrevious = {
+                        if (pagerState.currentPage > 0) scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+                    },
+                    onNext = {
+                        if (pagerState.currentPage + 1 < pagerState.pageCount) scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
+                    },
+                    onFit = { viewport = viewport.copy(scale = fitScale, panX = 0f, panY = 0f) },
+                    onAddPage = when (manifest?.kind) {
+                        NotebookKind.TEMPLATE -> viewModel::addTemplatePage
+                        NotebookKind.IMAGE -> ({ appendImage.launch("image/*") })
+                        else -> null
+                    },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
                 )
             }
         }
@@ -338,34 +387,6 @@ fun EditorScreen(
             text = { Text(message) },
             confirmButton = { TextButton(onClick = viewModel::clearError) { Text("确定") } },
         )
-    }
-}
-
-@Composable
-private fun EditorToolbar(
-    state: EditorUiState,
-    onTool: (Tool) -> Unit,
-    onUndo: () -> Unit,
-    onRedo: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onAddPage: (() -> Unit)?,
-    onFit: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        listOf(Tool.PEN to "钢笔", Tool.HIGHLIGHTER to "荧光笔", Tool.ERASER to "整笔擦", Tool.BOX_ASK to "框选问", Tool.PAN to "平移").forEach { (tool, label) ->
-            FilterChip(selected = state.tool == tool, onClick = { onTool(tool) }, label = { Text(label) })
-        }
-        TextButton(enabled = state.canUndo, onClick = onUndo) { Text("撤销") }
-        TextButton(enabled = state.canRedo, onClick = onRedo) { Text("重做") }
-        TextButton(onClick = onPrevious) { Text("上一页") }
-        TextButton(onClick = onNext) { Text("下一页") }
-        TextButton(onClick = onFit) { Text("适合宽度") }
-        onAddPage?.let { TextButton(onClick = it) { Text("加页") } }
     }
 }
 

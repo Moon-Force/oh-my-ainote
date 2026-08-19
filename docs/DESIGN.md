@@ -5,7 +5,7 @@
 | 文档标题 | oh-my-ainote v1 技术设计 |
 | 作者 | Moon-Force / 待署名 |
 | 日期 | 2026-08-16 |
-| 状态 | Baseline implemented（r7；实现差异见 `IMPLEMENTATION.md`，另待真机验收） |
+| 状态 | Baseline implemented（r9；实现差异见 `IMPLEMENTATION.md`，另待发布门禁验收） |
 | 仓库 | https://github.com/Moon-Force/oh-my-ainote |
 | 本地路径 | `D:\开源项目\ainote`（实现分支 `codex/implement-design`） |
 | 应用 ID | `com.moonforce.ohmyainote` |
@@ -17,6 +17,8 @@
 | r5 | 2026-08-16 | 用户试过 **Dart / Flutter**（自研墨水面 + pdfrx）。产品锁未改。 |
 | **r6** | **2026-08-16** | **用户改回 Kotlin + AndroidX Ink。** 产品锁与 r4 一致。Flutter / 自研 Dart 墨水 / pdfrx 再次成为已拒绝方案（见 §18.1）。 |
 | **r7** | **2026-08-18** | **按 r6 落地七模块实现。** JVM 测试、debug APK、release/R8 和依赖红线已验证；真机门禁保留在 `MANUAL_TEST.md`。 |
+| **r8** | **2026-08-19** | **按用户要求升级 AndroidX Ink 1.1.0-alpha07。** 当前钢笔基于官方 `pressurePen` 追加版本化宽度/浓淡压感；旧笔迹保持原样。 |
+| **r9** | **2026-08-19** | **补齐 Material 3 编辑器工具区与显示稳定性修复。** 颜色/粗细直接进入 Ink Brush；固定工具视口，并取消 UI 位图的手动 recycle。 |
 
 ---
 
@@ -41,7 +43,7 @@ v1 不在纸上做 OCR / 全文搜索 / 对话式笔记助手。AI 只有一条�
 | **Saber** | Flutter + `perfect_freehand`，最接近的跨平台手写 OSS | **先验艺术，只学习不 fork。** 产品不同：无限画布 / 多层文件夹 / Nextcloud 同步 / GPL-3.0；**PDF-as-paper 是已知缺口**；无本产品的框选 AI、互斥纸张 kind、单层 `library.json`、BYOK 任意 URL、便携 `.ainote`。fork 会把许可与产品一并绑死。 |
 | Xournal++ / Rnote | 桌面 PDF+ink 黄金标准 | 移动端口停更 / 归档 |
 | perfect-freehand / ink-stroke-modeler | 点列美化 / 预测 | 不是平板应用。r5 曾拟用其 Dart 移植做干笔轮廓；**r6 不用**（湿干都走 AndroidX Ink） |
-| **AndroidX Ink 1.0** | 官方 Android 低延迟墨水（2025-12-17 稳定，2026-08-12 仍为 Stable 1.0.0） | **采用。** r6 选定路径。含 `ink-authoring-compose`。编辑器级唯一 `InProgressStrokes`。 |
+| **AndroidX Ink 1.1.0-alpha07** | 官方 Android 低延迟墨水；1.1 提供程序化自定义笔刷 API | **采用并钉死 alpha07。** 当前钢笔在官方 `pressurePen` 上追加版本化宽度/浓淡压感。含 `ink-authoring-compose`，编辑器级唯一 `InProgressStrokes`。 |
 | Flutter 自研墨水 + pdfrx | r5 用户试过的跨端方案 | **r6 拒绝。** 延迟打不到官方 Ink 路径；第二客户端改回「格式 + PencilKit」，不再是同一 Flutter 应用。见 §18.1。 |
 
 不存在可直接 fork 的成熟 FOSS「Android 平板课堂本 + 框选 AI + 便携包」。正确路径是：**自研 `.ainote` + AndroidX Ink 把 PDF 当纸**；iPad 以后用 **同一格式 + PencilKit**。
@@ -61,7 +63,7 @@ v1 不在纸上做 OCR / 全文搜索 / 对话式笔记助手。AI 只有一条�
 4. AI v1 **不是** OCR / 搜索 / chat-first，而是框选 → 图 + 问题 → 多模态直问。
 5. 回答默认浮层（不脏纸）。可 **Insert** 一张 AI 卡片（缩略图 + 问 + 答，绑定该选区）。未插入的浮层对话丢弃、不导出。
 6. 纸张：必须能在 **PDF 页** 与 **图片** 背景上写；**不解析 PPTX**（用户自行转 PDF）。也可建 blank / lined / grid。一本笔记只有一种：模板 **或** PDF 导入 **或** 图片导入。v1 **禁止** 同一本里混 PDF 页与空白页。
-7. 栈（**r6 用户改回；r5 Flutter 已撤销**）：**Kotlin 2.1.x + Jetpack Compose + AndroidX Ink 1.0**（含 `ink-authoring-compose`）。PDF 显示 = 系统 `PdfRenderer` 双实例。笔画坐标在 **page space**（= PdfRenderer 显示空间）。**禁止** Flutter 自研墨水、禁止把 pdfrx 当选定显示引擎、禁止再维护 Ink PlatformView / View 分叉。
+7. 栈（**r8 当前锁定**）：**Kotlin 2.1.x + Jetpack Compose + AndroidX Ink 1.1.0-alpha07**（含 `ink-authoring-compose`）。PDF 显示 = 系统 `PdfRenderer` 双实例。笔画坐标在 **page space**（= PdfRenderer 显示空间）。**禁止** Flutter 自研墨水、禁止把 pdfrx 当选定显示引擎、禁止再维护 Ink PlatformView / View 分叉。
 8. OSS 格局见上表；用 AndroidX Ink，不 fork 桌面应用。
 9. AI 传输：**BYOK**，设置里填 OpenAI 兼容 `baseUrl` + `apiKey`。空 Key 时写 / PDF 仍可用。仓库无密钥。v1 不捆绑付费云。端侧 VLM 是未来可选项，不是 v1 唯一路径。
 10. 验收设备：**USI Android 平板**（小米 / 联想 / Pixel 级）。S Pen 更好但不是必测机。Boox 不是 v1 门槛。模拟器不能验收墨水延迟。
@@ -204,12 +206,12 @@ Gradle 模块名：`:app`、`:document`、`:ink`、`:pdf`、`:ai-api`、`:ai`、
 
 | 项 | 选择 | 理由 |
 | --- | --- | --- |
-| 语言 | **Kotlin 2.1.x**（下限 2.0.21，Ink 1.0.0 POM 要求） | 脚手架时钉具体补丁版，写入 `libs.versions.toml` |
+| 语言 | **Kotlin 2.1.x** | 钉具体补丁版，写入 `libs.versions.toml` |
 | AGP / Compose BOM | AGP **8.10+**、Compose BOM **现行稳定**（脚手架日钉死） | 禁止浮动 `+` |
 | UI | Jetpack Compose + Material 3 | 锁定 |
-| 墨水 | `androidx.ink:ink-*:1.0.0`（**钉稳定版，不用 1.1.0-alpha07**） | 2025-12-17 稳定；1.1 alpha 的像素橡皮不在 v1，且无完整序列化 |
-| 墨水 Compose | `ink-authoring-compose` / `ink-brush-compose` / `ink-geometry-compose` **1.0.0** | 唯一湿墨路径：`InProgressStrokes`。Google Maven 已发 1.0.0。**禁止**再维护一套 `InProgressStrokesView` + `AndroidView` 架构；Views API 仅作为 AGENTS.md 一行逃生舱（Compose artifact 从 Maven 消失时才考虑） |
-| 低延迟依赖 | Ink 1.0.0 已拉 `androidx.graphics:graphics-core:1.0.4` | Front buffer / 预测 |
+| 墨水 | `androidx.ink:ink-*:1.1.0-alpha07`（**精确钉死**） | 用户要求最新 Ink；只采用程序化自定义笔刷能力，不引入像素橡皮等额外实验功能 |
+| 墨水 Compose | `ink-authoring-compose` / `ink-brush-compose` / `ink-geometry-compose` **1.1.0-alpha07** | 唯一湿墨路径：`InProgressStrokes`。**禁止**再维护一套 `InProgressStrokesView` + `AndroidView` 架构；Views API 仅作为 AGENTS.md 一行逃生舱（Compose artifact 从 Maven 消失时才考虑） |
+| 低延迟依赖 | Ink 传递依赖的 `androidx.graphics:graphics-core` | Front buffer / 预测；版本由已钉死的 Ink 依赖图决定 |
 | PDF 显示 | `android.graphics.pdf.PdfRenderer` | 无额外 native、Apache 友好、支持 clip+matrix 瓦片 |
 | PDF 写出 | `com.tom-roush:pdfbox-android:2.0.27.0`（**冻结此版本，禁止默升**） | Apache-2.0。必须 `PDFBoxResourceLoader.init(context)`（见 §8.4）。**禁止 iText**（AGPL） |
 | 网络 | OkHttp 4.12+ | 单一 `POST {baseUrl}/chat/completions` |
@@ -221,7 +223,7 @@ Gradle 模块名：`:app`、`:document`、`:ink`、`:pdf`、`:ai-api`、`:ai`、
 | compileSdk / targetSdk | **36** | 2026-08 的现行目标 |
 | JDK | 17 | AGP 现行默认 |
 
-湿墨 **只**走 Compose `InProgressStrokes` @ `1.0.0`（2026-08-16 已在 Google Maven `group-index.xml` 与官方 Compose setup 文档中确认）。不要为「万一没有 compose 工件」分叉第二套 ink 架构。
+湿墨 **只**走 Compose `InProgressStrokes` @ `1.1.0-alpha07`。不要为「万一没有 compose 工件」分叉第二套 ink 架构。
 
 ### 4.4 运行时架构
 
@@ -338,12 +340,12 @@ fun AuthoringSurface(
 
 | 工具 | `BrushFamily` | 颜色 | 备注 |
 | --- | --- | --- | --- |
-| Pen | `StockBrushes.pressurePen()` | 用户选，默认 `#1A1A1A` | 有压感则用，无压感按 0.5 或 Brush 默认 |
+| Pen | `StockBrushes.pressurePen()` + `OMA_PRESSURE_INK_V1` 两条官方自定义 behavior | 用户选，默认 `#1A1A1A` | 保留官方预测/收笔/速度/方向/高压变宽；追加低压变细与压力不透明度；缺压力时倍率 1.0 |
 | Highlighter | `StockBrushes.highlighter()` | 默认 `#66FFEB3B`（预乘 / colorLong 按 Ink API） | `SelfOverlap` 用库默认 |
 | Eraser | 非笔刷 | — | 见命中 |
 | Box-ask | 非笔刷 | — | 画矩形 |
 
-序列化时只存枚举 `stockBrush: PRESSURE_PEN | HIGHLIGHTER` + `size` + `colorLong` + `epsilon`，与官方 `SerializedBrush` 同构，便于对照文档。
+序列化存版本化枚举 `stockBrush: PRESSURE_PEN | OMA_PRESSURE_INK_V1 | HIGHLIGHTER` + `size` + `colorLong` + `epsilon`。`PRESSURE_PEN` 仅用于兼容旧笔迹；新钢笔写入 `OMA_PRESSURE_INK_V1`。曲线定义以 `FORMAT.md` 为准，调整曲线必须新增 ID。
 
 #### 4.5.4 预测笔画、掌拒、压感、悬停
 
@@ -351,7 +353,7 @@ fun AuthoringSurface(
 | --- | --- |
 | 预测点 | 交给 `InProgressStrokes` / `InProgressStrokesView`（内部走 Motion Prediction + graphics-core）。应用不自写预测器。 |
 | 掌拒 | **硬规则**：`PointerType.Stylus`（及 `Eraser` 笔尾，见下）才能画；`PointerType.Touch` / `Mouse` 只驱动 viewport。不依赖 OEM 掌拒黑盒。 |
-| 压感 | `MotionEvent.getPressure()` → Ink `StrokeInput.pressure`。USI 有压感则美；无压感仍可写（恒定半压）。 |
+| 压感 | `MotionEvent.getPressure()` → Ink `StrokeInput.pressure`。当前钢笔以压力同时驱动线宽和不透明度，输入先做 30 ms 阻尼；无压力字段时使用中性倍率 1.0。 |
 | 倾斜 / 方位 | 有则写入（`AXIS_TILT`、orientation）；无则缺省。便携格式用 flag 位表示缺省。 |
 | 悬停 | USI 若提供 `ACTION_HOVER_MOVE`，**尽力**画淡十字 / 笔尖预览。**不是验收项。** |
 | 笔尾 | `PointerType.Eraser` 在任何工具下都走整笔橡皮（便利，不增加产品范围）。 |
@@ -585,7 +587,7 @@ v1 **不**在 Documents 树放工作副本。导出 PDF / `.ainote` 才走 SAF /
     {
       "id": "c1e0…",
       "tool": "pen",
-      "stockBrush": "PRESSURE_PEN",
+      "stockBrush": "OMA_PRESSURE_INK_V1",
       "color": "#FF1A1A1A",
       "sizePt": 2.5,
       "epsilon": 0.01,
@@ -686,7 +688,7 @@ fun StrokeRecord.toInkStroke(): Stroke {
 }
 ```
 
-缺省量用 Ink **1.0.0** `StrokeInput` 的命名常量（`NO_PRESSURE` 及同文件中的 tilt / orientation 缺省常量；实现时对照 1.0.0 源码，不要臆造 1.1 的度/弧度 API）。不要写裸 `Float.NaN`。**不要**调用 1.1 的 `StockBrushes.pressurePen(version=…)`。
+缺省量用 Ink **1.1.0-alpha07** `StrokeInput` 的命名常量（`NO_PRESSURE` 及同文件中的 tilt / orientation 缺省常量）。不要写裸 `Float.NaN`。自定义钢笔从无参数 `StockBrushes.pressurePen()` 复制 coat/tip 并追加 behavior，不重写官方已有 behavior。
 
 **禁止**把 `PartitionedMesh` 当权威存储（1.1 实验橡皮也尚无序列化）。网格由输入重建。
 
@@ -788,7 +790,8 @@ v1 不写 Swift。摄入端应按下表实现：
 | `tilt` 弧度（与笔法线夹角，Android `AXIS_TILT`） | `altitude` ≈ `π/2 - tilt`（实现时用真机对表；文档注明「须校准」） |
 | `orient` 弧度 | `azimuth` |
 | `sizePt` | `PKStrokePoint.size` / `PKInk` 宽度；荧光笔更大 |
-| `PRESSURE_PEN` | `PKInk(.pen)` |
+| `PRESSURE_PEN` | `PKInk(.pen)`，兼容旧笔迹 |
+| `OMA_PRESSURE_INK_V1` | `PKInk(.pen)`；按 `FORMAT.md` 的版本化压力曲线映射 force、宽度与 alpha |
 | `HIGHLIGHTER` | `PKInk(.marker)`，低 alpha |
 | `color` ARGB | `PKInk` color |
 | `selection` / `anchor` | 自定义 overlay 视图，不是 PKStroke |
@@ -1115,7 +1118,7 @@ flowchart LR
 3. 内存：`kind=image` 与密卡片 **一次只解码 1 页** 位图，写完即 recycle。禁止 200 页 `drawImage` 同时留在一个 `PDDocument` 的堆里。`kind=pdf` 不解码背景页。
 4. 每页：
    - 高亮：`setNonStrokingColor` + alpha，v1 允许 **polyline 宽线**，alpha 0.35。
-   - 钢笔：**默认按压感变线宽**（每点宽度 ≈ `sizePt * pressure`，缺压感则用 `sizePt`；圆帽、polyline）。设置项 `exportPressureVarying` 默认 **true**；用户可改回恒定 `sizePt`（导出太慢或观感不对时）。荧光笔仍用恒定宽 + alpha，不跟压感。
+   - 钢笔：`PRESSURE_PEN` 旧笔迹保留旧导出近似；`OMA_PRESSURE_INK_V1` 按 `FORMAT.md` 的版本化曲线逐段重放线宽和不透明度（alpha 量化为 32 档以限制 PDF graphics-state 数量），缺压感则使用中性倍率 1.0；圆帽、圆连接。设置项 `exportPressureVarying` 默认 **true**；用户可改回恒定 `sizePt` 与基础 alpha。荧光笔仍用恒定宽 + alpha，不跟压感。
    - 卡片：先用 Android `Paint` 整块栅格再 `drawImage`（避免 CJK 字体许可）。
 5. 写到 tmp，再经 SAF。进度：页 i / N。导出 sheet 文案：**「已插入的 AI 卡片会进入 PDF / .ainote；未插入的浮层不会。」**
 6. Producer 元数据：`oh-my-ainote {appVersion}`。
@@ -1147,12 +1150,12 @@ PR-12 验收：夹具 PDF 含 `/Rotate 90` + 非零 CropBox，屏幕墨水与扁
 
 | ID | 风险 | 严重度 | 缓解 |
 | --- | --- | --- | --- |
-| R1 | USI 机墨水 > 20 ms，主观差 | **高** | 钉 Ink 1.0 + front buffer；笔 / 指分流；验收机清单；不做模拟器自欺 |
+| R1 | USI 机墨水 > 20 ms，主观差 | **高** | 钉 Ink 1.1.0-alpha07 + front buffer；笔 / 指分流；验收机清单；不做模拟器自欺 |
 | R2 | 200 页 PDF / 墨水 mesh OOM | **高** | 3 页整图 + 96 MB 瓦片；mesh 仅 ±1 页；禁止全文档 `List<Stroke>` |
 | R3 | `PdfRenderer` 高倍模糊 | 中 | 瓦片 + scale bucket；不够再评估 Pdfium |
 | R4 | `PdfRenderer` 单页锁导致翻页卡 | 中 | 双实例、各串行 `openPage`；API &lt; 35 不共享实例跨线程 |
 | R5 | Windows 无法跑 Ink native / PdfRenderer | **高**（开发体验） | `:document` / `:ai-api` 单测在 JVM；墨水必须真机。CI 用 Ubuntu assemble + JVM test |
-| R6 | Ink 1.1 alpha 像素橡皮诱骗进依赖 | 中 | 钉 1.0.0；AGENTS.md 写明 |
+| R6 | Ink alpha API/行为变动造成笔迹外观漂移 | 中 | 精确钉 alpha07；持久化版本化笔刷 ID；升级时真机与导出回归 |
 | R7 | 误加 iText → AGPL 污染 MIT | **高** | 依赖白名单；CI 扫 `itext` |
 | R8 | 密钥进日志 / crash report | **高** | 红线；Sentry 默认关；见 §13 |
 | R9 | 掌拒失败（手掌留下墨） | **高** | 只认 `PointerType.Stylus` |
@@ -1220,7 +1223,7 @@ PR-12 验收：夹具 PDF 含 `/Rotate 90` + 非零 CropBox，屏幕墨水与扁
 
 本地应用，默认安静。
 
-> r7 实现说明：debug 顶栏 `Perf` 可显示干墨交接耗时、scale、当前页 mesh 数和位图上限；它还不是本文目标的 move→frame / tile-cache 精确仪表。当前没有 Timber、ACRA 或 Sentry，因而也没有默认远程遥测。
+> r9 实现说明：debug 顶部更多菜单可开关性能浮层，显示干墨交接耗时、scale、当前页 mesh 数和位图上限；它还不是本文目标的 move→frame / tile-cache 精确仪表。当前没有 Timber、ACRA 或 Sentry，因而也没有默认远程遥测。
 
 - **日志**：Timber，debug 详细、release `INFO+`。标签：`Ink`、`Pdf`、`Ai`、`Export`、`Store`。
 - **性能**：debug 浮层（长按版本号 7 次打开）：最后一笔 move→frame ms、瓦片数、缓存 MB、当前 scale。
@@ -1326,7 +1329,7 @@ flowchart LR
 
 ### 18.1 工程栈：Flutter + 自研墨水（**r5 试过，r6 拒绝**）vs Kotlin + AndroidX Ink（**r4 / r6 选定**）
 
-| | Flutter + 自研墨水 + pdfrx（**r5，已拒绝**） | Kotlin + AndroidX Ink 1.0（**r6 选定**） |
+| | Flutter + 自研墨水 + pdfrx（**r5，已拒绝**） | Kotlin + AndroidX Ink 1.1.0-alpha07（**r8 当前**） |
 | --- | --- | --- |
 | 语言 / 作者环境 | 一套 Dart；Windows 上 `dart test` + `flutter build apk` | Kotlin + AGP；格式 / AI 形状在 Windows JVM 测；墨水必须 USI 真机 |
 | 延迟 | 诚实目标曾是 p95 ≤ 30 ms；打不到 Tab S8 的 4 ms 演示 | Front buffer + 预测。v1 门槛 **p95 < 20 ms**（4 ms 是演示，不是我们的条） |
@@ -1367,7 +1370,7 @@ flowchart LR
 
 ### 18.8 OEM 笔 SDK（三星 SPEN / 联想 Pen）vs 只用 Ink
 
-拒绝。验收机是 USI，产品锁是 AndroidX Ink 1.0。再接一套 `MotionEvent` 预测或厂商 SDK 会分叉延迟路径，且绑死 OEM。S Pen 只是「更好的 USI 同类」，走同一 Ink 表面。
+拒绝。验收机是 USI，产品锁是 AndroidX Ink 1.1.0-alpha07。再接一套 `MotionEvent` 预测或厂商 SDK 会分叉延迟路径，且绑死 OEM。S Pen 只是「更好的 USI 同类」，走同一 Ink 表面。
 
 ---
 
@@ -1382,7 +1385,7 @@ flowchart LR
 | `.ainote` 关联 | **不注册** MIME / intent；只应用内 SAF |
 | AI `baseUrl` | **任意 URL，无白名单**（含任意 `http://`）；首次请求强确认 |
 | 书架 | **有单层文件夹、无标签**；`library.json`；一本至多一个文件夹 |
-| 工程栈（r6） | **Kotlin + Compose + AndroidX Ink 1.0**。r5 试过 Flutter 后改回。Flutter 再次拒绝 |
+| 工程栈（r8） | **Kotlin + Compose + AndroidX Ink 1.1.0-alpha07**。使用官方自定义笔刷 API；Flutter 仍拒绝 |
 
 ---
 
@@ -1394,14 +1397,14 @@ flowchart LR
 
 | 决策 | 选择 | 理由 |
 | --- | --- | --- |
-| 工程栈 | **r6 = Kotlin + Compose + Ink 1.0** | 用户在 r5 试过 Flutter / 自研墨水 / pdfrx 后改回；产品锁未改 |
-| 语言 / UI | **Kotlin 2.1.x**（≥ 2.0.21）+ Jetpack Compose + Material 3 | Ink 1.0.0 POM；钉 `libs.versions.toml` |
+| 工程栈 | **r8 = Kotlin + Compose + Ink 1.1.0-alpha07** | 用户要求升级最新 Ink，并保留官方低延迟路径与压感墨色 |
+| 语言 / UI | **Kotlin 2.1.x** + Jetpack Compose + Material 3 | 钉 `libs.versions.toml` |
 | 包名 | `com.moonforce.ohmyainote` | 与 GitHub org / 产品名对齐 |
 | 文件扩展名 | `.ainote`（ZIP） | 可读；工作副本为目录 |
 | 格式版本 | `formatVersion = 1`，笔画 = OmaInputsV1 | 便携，给 PencilKit |
 | 坐标 | 显示空间 = **PdfRenderer 所见**；左上 y 下；pt；`epsilon = 0.01` | 持久化 `mediaBox/cropBox/rotate`；`pageToPdfUserSpace` 含校正后的 `/Rotate 180`（`y_user = cly + y`） |
 | 图片 | 导入烘焙 EXIF | 避免与 Rotate 同类的显示/导出分裂 |
-| Ink 版本 | **1.0.0 稳定** Compose `InProgressStrokes`，不用 1.1 alpha | 像素橡皮非目标且不能序列化；不维护 View 分叉 |
+| Ink 版本 | **1.1.0-alpha07** Compose `InProgressStrokes` | 使用官方程序化自定义笔刷；不维护 View 分叉，不顺带启用其他 alpha 功能 |
 | 湿墨实例 | 编辑器级 **一个** overlay，不进 Pager item | 官方单实例 + 防 Pager 偷笔 |
 | 书写中相机 | 冻结至抬笔 / cancel | 防湿干错位 |
 | minSdk | **29** | 不做 21–28 慢速 front-buffer 回退 |
@@ -1425,7 +1428,7 @@ flowchart LR
 | 湿墨 API | `InProgressStrokes` + `pageToView.invert()` → Compose `Matrix` | 官方缩放合约；删错误示例公式 |
 | 掌拒 | 只认 Stylus | 跨 OEM |
 | 延迟门槛 | **p95 < 20 ms**（Ink 路径）；4 ms 是 Tab S8 演示，不是我们的条 | USI 不是旗舰三星演示机 |
-| 构建钉扎 | Kotlin ≥ 2.0.21 / 2.1.x，AGP 8.10+，Compose BOM 钉死 | Ink 1.0.0 POM；禁止浮动版本 |
+| 构建钉扎 | Kotlin 2.1.x，AGP 8.10+，Compose BOM 与 Ink alpha07 钉死 | 禁止浮动版本 |
 | 导出钢笔线宽 | **默认压感变宽**；设置 `exportPressureVarying` 可关 | 用户推翻「恒定宽保 200 页速度」 |
 | 模板纸 | 仅 blank / lined / grid | 用户确认；无 dot-grid |
 | `.ainote` 系统关联 | **不注册** | 只应用内 SAF 导入 / Sharesheet 导出 |
@@ -1439,16 +1442,16 @@ flowchart LR
 ## 21. References
 
 - 产品锁定来源：本设计前的 grilling（正文 §2.3）。r4 拍板工程栈与 OQ；r5 试过 Flutter；**r6 改回 Kotlin + AndroidX Ink**。
-- AndroidX Ink 发布说明：https://developer.android.com/jetpack/androidx/releases/ink （Stable 1.0.0 = 2025-12-17；2026-08-12 仍为 1.0.0，alpha 1.1.0-alpha07）
+- AndroidX Ink 发布说明：https://developer.android.com/jetpack/androidx/releases/ink （当前采用 2026-08-12 发布的 1.1.0-alpha07）
 - Ink 简介与 4 ms 演示：https://android-developers.googleblog.com/2024/10/introducing-ink-api-jetpack-library.html
 - Compose 湿墨与存储：https://developer.android.com/develop/ui/compose/touch-input/stylus-input/ink-api-state-preservation
 - Epsilon / 坐标系：https://developer.android.com/develop/ui/compose/touch-input/stylus-input/ink-api-coordinate-system
 - Geometry 橡皮：https://developer.android.com/develop/ui/compose/touch-input/stylus-input/ink-api-geometry-apis
-- Ink 依赖安装（1.0.0）：https://developer.android.com/develop/ui/views/touch-and-input/stylus-input/ink-api-setup
+- Ink 依赖安装：https://developer.android.com/develop/ui/views/touch-and-input/stylus-input/ink-api-setup
 - `PdfRenderer`：https://developer.android.com/reference/android/graphics/pdf/PdfRenderer
 - PdfBox-Android：https://github.com/TomRoush/PdfBox-Android （`com.tom-roush:pdfbox-android:2.0.27.0`，Apache-2.0）
 - PencilKit：[`PKStrokePoint`](https://developer.apple.com/documentation/pencilkit/pkstrokepoint)、[`PKInk`](https://developer.apple.com/documentation/pencilkit/pkink)、WWDC20 10148。WWDC26 session 203（B 样条 ↔ 贝塞尔）**待核实**，不挡 v1
-- Ink `InProgressStrokes` Compose 签名 / `maskPath` / 单实例：androidx-ink 1.0.0 源码 KDoc
+- Ink `InProgressStrokes` Compose 签名 / `maskPath` / 单实例：androidx-ink 1.1.0-alpha07 源码 KDoc
 - `pointerEventToWorldTransform` 类型应为 `androidx.compose.ui.graphics.Matrix`（issuetracker 481165331：官方 state-preservation 示例误用 `android.graphics.Matrix`）
 - EncryptedSharedPreferences 废弃：AndroidX Security 1.1
 - 兄弟产品语气（勿抄架构）：`D:\开源项目\aiemail`，MIT
@@ -1467,7 +1470,7 @@ flowchart LR
 
 - **影响**：`LICENSE`、`README.md`、`SECURITY.md`、`AGENTS.md`、`.gitignore`、`settings.gradle.kts`、`gradle/libs.versions.toml`、空的 `:app` `:document` `:ink` `:pdf` `:ai-api` `:ai` `:export`、`.github/workflows/ci.yml`、`network_security_config.xml`、`AndroidManifest.xml`
 - **依赖**：无（空仓第一笔）
-- **说明**：Hello Activity「oh-my-ainote」；`applicationId com.moonforce.ohmyainote`；minSdk 29。`libs.versions.toml` **钉死** Kotlin 2.1.x（≥ 2.0.21）、AGP 8.10+、Compose BOM 稳定版、`androidx.ink:ink-*:1.0.0`、`pdfbox-android:2.0.27.0`（注释：禁止默升）。清单：`INTERNET`、`android:allowBackup="false"`、`android:usesCleartextTraffic="true"`、`FileProvider` 占位、**无** `.ainote` VIEW/SEND intent-filter。`network_security_config.xml`：`base-config cleartextTrafficPermitted=true`（任意用户 `http://` 主机；**不要**写成 RFC1918 domain-config）。`OhMyAinoteApp` 调用 `PDFBoxResourceLoader.init`。R8/Ink jni keep 占位。CI：`test` + `assembleDebug` + iText 黑名单。AGENTS.md 一行：Views `InProgressStrokesView` 仅逃生舱，不是第二架构。
+- **说明**：Hello Activity「oh-my-ainote」；`applicationId com.moonforce.ohmyainote`；minSdk 29。`libs.versions.toml` **钉死** Kotlin 2.1.x（≥ 2.0.21）、AGP 8.10+、Compose BOM 稳定版、`androidx.ink:ink-*:1.1.0-alpha07`、`pdfbox-android:2.0.27.0`（注释：禁止默升）。清单：`INTERNET`、`android:allowBackup="false"`、`android:usesCleartextTraffic="true"`、`FileProvider` 占位、**无** `.ainote` VIEW/SEND intent-filter。`network_security_config.xml`：`base-config cleartextTrafficPermitted=true`（任意用户 `http://` 主机；**不要**写成 RFC1918 domain-config）。`OhMyAinoteApp` 调用 `PDFBoxResourceLoader.init`。R8/Ink jni keep 占位。CI：`test` + `assembleDebug` + iText 黑名单。AGENTS.md 一行：Views `InProgressStrokesView` 仅逃生舱，不是第二架构。
 
 ### PR-01 — `docs: PRODUCT, FORMAT, IMPLEMENTATION skeleton`
 

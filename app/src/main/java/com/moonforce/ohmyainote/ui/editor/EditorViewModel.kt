@@ -47,6 +47,7 @@ data class EditorUiState(
     val finishedStrokes: List<FinishedStroke> = emptyList(),
     val tool: Tool = Tool.PEN,
     val colorArgb: Int = BrushCatalog.defaultColor(Tool.PEN),
+    val brushSizePt: Float = BrushCatalog.defaultSize(Tool.PEN),
     val overlay: OverlaySession? = null,
     val aiLoading: Boolean = false,
     val confirmationUrl: String? = null,
@@ -71,6 +72,10 @@ class EditorViewModel(
     private val persistenceMutex = Mutex()
     private var pendingQuestion: String? = null
     private var loadGeneration = 0
+    private var penColorArgb = BrushCatalog.defaultColor(Tool.PEN)
+    private var highlighterColorArgb = BrushCatalog.defaultColor(Tool.HIGHLIGHTER)
+    private var penSizePt = BrushCatalog.defaultSize(Tool.PEN)
+    private var highlighterSizePt = BrushCatalog.defaultSize(Tool.HIGHLIGHTER)
 
     val notebookDirectory get() = container.context.filesDir.toPath().resolve("notebooks/${notebookId.value}")
     private val notebookDir get() = notebookDirectory
@@ -113,8 +118,39 @@ class EditorViewModel(
 
     fun setTool(tool: Tool) {
         mutableState.update {
-            it.copy(tool = tool, colorArgb = BrushCatalog.defaultColor(tool), overlay = if (tool != Tool.BOX_ASK) null else it.overlay)
+            it.copy(
+                tool = tool,
+                colorArgb = when (tool) {
+                    Tool.PEN -> penColorArgb
+                    Tool.HIGHLIGHTER -> highlighterColorArgb
+                    else -> BrushCatalog.defaultColor(tool)
+                },
+                brushSizePt = when (tool) {
+                    Tool.PEN -> penSizePt
+                    Tool.HIGHLIGHTER -> highlighterSizePt
+                    else -> BrushCatalog.defaultSize(tool)
+                },
+                overlay = if (tool != Tool.BOX_ASK) null else it.overlay,
+            )
         }
+    }
+
+    fun setBrushColor(colorArgb: Int) {
+        when (mutableState.value.tool) {
+            Tool.PEN -> penColorArgb = colorArgb
+            Tool.HIGHLIGHTER -> highlighterColorArgb = colorArgb
+            else -> return
+        }
+        mutableState.update { it.copy(colorArgb = colorArgb) }
+    }
+
+    fun setBrushSize(sizePt: Float) {
+        when (mutableState.value.tool) {
+            Tool.PEN -> penSizePt = sizePt
+            Tool.HIGHLIGHTER -> highlighterSizePt = sizePt
+            else -> return
+        }
+        mutableState.update { it.copy(brushSizePt = sizePt) }
     }
 
     /** Called on the UI run loop; dry state is updated before persistence to prevent wet/dry flicker. */

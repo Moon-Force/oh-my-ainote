@@ -6,14 +6,14 @@ oh-my-ainote 是 Android 平板优先、本地优先、无账号的课堂与会�
 
 ## Delivery status
 
-v1 基线功能已经实现并可生成 debug/release APK。当前实现差异记录在 `IMPLEMENTATION.md`；发布门禁还包括 `MANUAL_TEST.md` 中尚未执行的 USI 平板、长 PDF 与旋转 CropBox 真机验收。
+v1 基线功能已经实现并可生成 debug/release APK。图片导入打开、页面显示稳定性和 Material 3 编辑器工具区已完成修复/接入。当前实现差异记录在 `IMPLEMENTATION.md`；发布门禁还包括 `MANUAL_TEST.md` 中尚未执行的 USI 平板、长 PDF 与旋转 CropBox 真机验收。
 
 ## v1
 
 - 一本笔记采用且只采用一种纸张来源：模板、PDF 或图片。
 - 模板仅支持 blank、lined、grid；PDF 本不增删页；图片本可追加图片页。
 - 笔写字，手指平移、缩放和翻页。
-- 工具为钢笔、荧光笔、整笔橡皮、撤销、重做、框选提问。
+- 工具为可调颜色/粗细的钢笔与荧光笔、整笔橡皮、框选提问和手形平移；撤销/重做是独立历史动作。
 - AI 为 BYOK：框选页面区域后发送 JPEG 与问题到用户配置的 OpenAI 兼容地址。
 - AI 回答默认仅存在于浮层；用户主动 Insert 后才成为页面卡片并参与导出。
 - 无 API Key 或离线时，书写、翻页和 PDF 导出不受影响。

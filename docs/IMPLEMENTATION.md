@@ -18,26 +18,31 @@
 - [x] PR-12：PdfBox 扁平 PDF 导出
 - [x] PR-13：`.ainote` 打包与应用内 SAF 导入
 - [x] PR-14：Release/F-Droid、debug 性能浮层、真机清单
+- [x] PR-15：升级 AndroidX Ink 1.1.0-alpha07，基于官方 `pressurePen` 增加版本化线宽/浓淡压感并同步 PDF 导出
+- [x] PR-16：修复 Compose 位图生命周期，避免图片本打开崩溃、背景/封面消失与重用已回收位图
+- [x] PR-17：Material 3 编辑器工具区，接入钢笔/荧光笔颜色与粗细，固定视口避免属性栏导致纸面缩放或位移
 
 代码阶段完成不代表真机验收完成。USI 延迟、掌拒、200 页 PDF 内存和旋转 CropBox 导出对齐仍以 `MANUAL_TEST.md` 的未勾选项目为发布门禁。
 
 ## Verification snapshot
 
-验证日期：2026-08-18（Windows 11，JVM 目标 17，Android SDK 36）。
+验证日期：2026-08-19（Windows 11，JVM 目标 17，Android SDK 36）。
 
 | 检查 | 命令 / 结果 |
 | --- | --- |
-| Oma/Store/坐标 | `:document:test`，6 tests，0 failures |
+| Oma/Store/坐标/压感曲线 | 已编译测试 class 后直接运行 JUnit，7 tests，0 failures；中文仓库路径下 Gradle Test Worker 的 classpath 问题见 `BUILDING.md` |
 | OpenAI 请求形状 | `:ai-api:test`，1 test，0 failures |
-| Debug APK | `:app:assembleDebug` 成功；约 55.6 MB（debug 不限体积） |
-| Release/R8 | `:app:assembleRelease` 成功；未签名 APK 约 16.2 MB |
+| Debug APK | Ink 1.1.0-alpha07 下 `:app:assembleDebug` 成功；56,869,917 bytes（debug 不限体积）；四种 ABI 的 `libink.so` 已打包 |
+| Release/R8 | Ink 1.1.0-alpha07 下 `:app:assembleRelease` 成功；未签名 APK 16,823,214 bytes；R8/lintVital 通过，四种 ABI 的 `libink.so` 已打包 |
+| 原生符号 | `stripReleaseDebugSymbols` 对 `libink.so` 等 AndroidX 原生库提示无法再 strip，随后按原样打包且整体构建成功；该警告不等于 APK 失败 |
 | 许可红线 | `releaseRuntimeClasspath` 无 iText |
 
-自动测试覆盖 OmaInputsV1 变长 flags、PDF 四种旋转共 16 个角点、Affine 往返、页目录备份/提升崩溃恢复、重复 `.ainote` 导入新 UUID，以及 MockWebServer 的路径、Authorization、JSON 与响应解析。
+自动测试覆盖 OmaInputsV1 变长 flags、PDF 四种旋转共 16 个角点、Affine 往返、页目录备份/提升崩溃恢复、重复 `.ainote` 导入新 UUID、`OMA_PRESSURE_INK_V1` 的线宽/不透明度边界，以及 MockWebServer 的路径、Authorization、JSON 与响应解析。
 
 ## Remaining release gates
 
 - USI 实机湿墨/干墨对齐、掌拒、笔尾橡皮和横向长笔画仲裁。
+- USI 实机轻/中/重压力的线宽与浓淡、快速转向、慢速收笔，以及保存重开和 PDF 导出后的视觉一致性。
 - 40/200 页 PDF 的翻页、缩放和内存稳定性。
 - `/Rotate 90` + 非零 CropBox 的屏幕、AI 裁切和导出视觉对齐。
 - 真机 Keystore、HTTP 首次警告、错误 Key、超时与 SAF 阅读器互操作。
@@ -55,7 +60,13 @@
 | 封面刷新 | 退出编辑器时生成最长边 512 JPEG | 设计中的 5 秒防抖尚未接入，属于体验优化 |
 | AI 卡片 | 可显示、持久化、导出和随包往返 | 尚未提供点击后的只读全文展开 |
 | 导出分享 | SAF `CreateDocument` 可导出 PDF / `.ainote`，且有隐私确认 | FileProvider sharesheet 尚未提供 UI 入口 |
-| Debug 性能浮层 | 顶栏 `Perf` 显示 dry handoff、scale、mesh 和位图上限 | 尚未测量最后 move→frame，也未显示真实 tile cache 数据 |
+| Debug 性能浮层 | 顶部更多菜单可开关 dry handoff、scale、mesh 和位图上限 | 尚未测量最后 move→frame，也未显示真实 tile cache 数据 |
 | Observability | 默认无远程日志/崩溃上报 | Timber 与可选 ACRA/Sentry 未接入；这不改变隐私边界 |
 
 其中“模板删页”是功能差异；PDF 瓦片是否成为发布阻断由目标设备的长 PDF 验收决定。其余项目不影响 `.ainote` v1 兼容性。
+
+## 2026-08-19 targeted regressions
+
+- 图片导入后点击打开：已移除页面背景、AI 卡片缩略图和书架封面上的手动 `Bitmap.recycle()`，避免 Compose 仍在绘制时命中已回收位图。
+- 写字后纸面消失/缩小：工具区固定为 `140dp`，笔刷属性行只在该区域内展开；画布使用 `clipToBounds()`，不再覆盖工具区或触发页面重测量。
+- 编辑器工具区：钢笔、荧光笔、橡皮、顶部导出菜单已完成真机触摸检查；视觉对比记录见 [`../design-qa.md`](../design-qa.md)。

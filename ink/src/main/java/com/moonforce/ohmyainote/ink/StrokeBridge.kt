@@ -42,6 +42,7 @@ object StrokeBridge {
         }
         val family = when (record.stockBrush) {
             StockBrush.PRESSURE_PEN -> StockBrushes.pressurePen()
+            StockBrush.OMA_PRESSURE_INK_V1 -> BrushCatalog.pressureInkFamily()
             StockBrush.HIGHLIGHTER -> StockBrushes.highlighter()
         }
         val brush = Brush.createWithColorIntArgb(
@@ -79,7 +80,11 @@ object StrokeBridge {
         return StrokeRecord(
             id = id,
             tool = if (tool == Tool.HIGHLIGHTER) StrokeTool.HIGHLIGHTER else StrokeTool.PEN,
-            stockBrush = if (tool == Tool.HIGHLIGHTER) StockBrush.HIGHLIGHTER else StockBrush.PRESSURE_PEN,
+            stockBrush = if (tool == Tool.HIGHLIGHTER) {
+                StockBrush.HIGHLIGHTER
+            } else {
+                StockBrush.OMA_PRESSURE_INK_V1
+            },
             color = "#%08X".format(colorArgb),
             sizePt = stroke.brush.size,
             epsilon = stroke.brush.epsilon,

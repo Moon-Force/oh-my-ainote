@@ -17,6 +17,13 @@ fun FinishedStrokesLayer(
     val renderer = remember { CanvasStrokeRenderer.create() }
     val matrix = viewport.pageToViewAndroid()
     Canvas(modifier.fillMaxSize()) {
-        strokes.forEach { renderer.draw(drawContext.canvas.nativeCanvas, it.ink, matrix) }
+        val canvas = drawContext.canvas.nativeCanvas
+        val saveCount = canvas.save()
+        try {
+            canvas.concat(matrix)
+            strokes.forEach { renderer.draw(canvas, it.ink, matrix) }
+        } finally {
+            canvas.restoreToCount(saveCount)
+        }
     }
 }
