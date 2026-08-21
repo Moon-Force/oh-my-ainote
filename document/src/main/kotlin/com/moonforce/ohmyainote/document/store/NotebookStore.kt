@@ -13,6 +13,7 @@ import com.moonforce.ohmyainote.document.model.PaperKind
 import com.moonforce.ohmyainote.document.model.Sink
 import com.moonforce.ohmyainote.document.model.SourceFile
 import com.moonforce.ohmyainote.document.model.StrokeRecord
+import com.moonforce.ohmyainote.document.model.TextRecord
 import kotlinx.coroutines.flow.StateFlow
 
 interface NotebookStore {
@@ -38,6 +39,10 @@ interface NotebookSession {
     suspend fun removeStrokes(pageId: PageId, ids: Set<String>)
     suspend fun insertCard(pageId: PageId, card: AiCardRecord)
     suspend fun deleteCard(pageId: PageId, cardId: String)
+    suspend fun replaceStrokesWithText(pageId: PageId, strokeIds: Set<String>, text: TextRecord)
+    suspend fun restoreStrokesRemovingText(pageId: PageId, strokes: List<StrokeRecord>, textId: String)
+    suspend fun removeStrokesAndTexts(pageId: PageId, strokeIds: Set<String>, textIds: Set<String>)
+    suspend fun insertStrokesAndTexts(pageId: PageId, strokes: List<StrokeRecord>, texts: List<TextRecord>)
     suspend fun addTemplatePage()
     suspend fun deleteTemplatePage(pageId: PageId)
     suspend fun addImagePage(image: SourceFile)

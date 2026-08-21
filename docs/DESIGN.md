@@ -5,7 +5,7 @@
 | 文档标题 | oh-my-ainote v1 技术设计 |
 | 作者 | Moon-Force / 待署名 |
 | 日期 | 2026-08-16 |
-| 状态 | Baseline implemented（r9；实现差异见 `IMPLEMENTATION.md`，另待发布门禁验收） |
+| 状态 | Baseline implemented（r11；实现差异见 `IMPLEMENTATION.md`，另待发布门禁验收） |
 | 仓库 | https://github.com/Moon-Force/oh-my-ainote |
 | 本地路径 | `D:\开源项目\ainote`（实现分支 `codex/implement-design`） |
 | 应用 ID | `com.moonforce.ohmyainote` |
@@ -19,6 +19,8 @@
 | **r7** | **2026-08-18** | **按 r6 落地七模块实现。** JVM 测试、debug APK、release/R8 和依赖红线已验证；真机门禁保留在 `MANUAL_TEST.md`。 |
 | **r8** | **2026-08-19** | **按用户要求升级 AndroidX Ink 1.1.0-alpha07。** 当前钢笔基于官方 `pressurePen` 追加版本化宽度/浓淡压感；旧笔迹保持原样。 |
 | **r9** | **2026-08-19** | **补齐 Material 3 编辑器工具区与显示稳定性修复。** 颜色/粗细直接进入 Ink Brush；固定工具视口，并取消 UI 位图的手动 recycle。 |
+| **r10** | **2026-08-20** | **可选手写转标准字。** 撤销旁图标开关；停笔后用 ML Kit Digital Ink 识别新钢笔并落 `TextRecord` 删墨。`minReaderVersion=2` 保护旧阅读器。 |
+| **r11** | **2026-08-20** | 转写停笔改为 2s；开关图标改为 Material 双 T。 |
 
 ---
 
@@ -111,9 +113,9 @@ v1 不在纸上做 OCR / 全文搜索 / 对话式笔记助手。AI 只有一条�
 │  ui/library · ui/editor · ui/settings · Overlay · Export    │
 │  ViewModel 不碰 MotionEvent；手势只在 :ink / 编辑器层处理      │
 ├───────────────┬───────────────┬───────────────┬─────────────┤
-│  :ink         │  :pdf         │  :ai          │  :export    │
-│  AndroidX Ink │  PdfRenderer  │  Keystore     │  PdfBox     │
-│  作者/渲染/命中│  瓦片栅格     │  裁切 / 会话  │  压平写回   │
+│  :ink         │  :pdf         │  :ai / :hwr   │  :export    │
+│  AndroidX Ink │  PdfRenderer  │  Keystore /   │  PdfBox     │
+│  作者/渲染/命中│  瓦片栅格     │  转写 ML Kit  │  压平写回   │
 ├───────────────┴───────┬───────┴───────────────┴─────────────┤
 │  :ai-api  JVM         │  :document  JVM                      │
 │  PromptBuilder / HTTP │  清单、页、便携笔画、卡片、I/O、Undo  │
@@ -122,7 +124,7 @@ v1 不在纸上做 OCR / 全文搜索 / 对话式笔记助手。AI 只有一条�
 
 v1 **不**建 `:feature-editor` 一类模块。用例 ViewModel 放在 `:app` 的 `ui/library`、`ui/editor`、`ui/settings`。仅当 `:app` 大到无法单 PR 审查时再拆 feature 模块。
 
-`:document` 与 `:ai-api` **不得**依赖 Android SDK，以便在 **Windows JVM** 上单测格式、撤销与 AI 请求形状。`:ink` / `:pdf` / `:export` / `:ai` 依赖 Android。`:ai` 只放 Keystore、`RegionRasterizer`、`OverlaySession`、DataStore 桥；HTTP 模型与 `PromptBuilder` 在 `:ai-api`。
+`:document` 与 `:ai-api` **不得**依赖 Android SDK，以便在 **Windows JVM** 上单测格式、撤销与 AI 请求形状。`:ink` / `:pdf` / `:export` / `:ai` / `:hwr` 依赖 Android。`:ai` 只放 Keystore、`RegionRasterizer`、`OverlaySession`、DataStore 桥；HTTP 模型与 `PromptBuilder` 在 `:ai-api`。`:hwr` 放 ML Kit Digital Ink 客户端与转写开关，不得进入湿墨路径。
 
 ### 4.2 建议仓库树（从空仓库脚手架）
 
@@ -186,6 +188,7 @@ oh-my-ainote/
 │       │   ├── PromptBuilder.kt
 │       │   └── ChatCompletionsModels.kt
 │       └── test/kotlin/...          # MockWebServer，不读真实 Key
+├── hwr/                             # :hwr  Android library，ML Kit 数字墨水识别
 ├── ai/                              # :ai  Android library
 │   └── src/main/java/.../ai/
 │       ├── RegionRasterizer.kt      # Bitmap 裁切，仅 Android

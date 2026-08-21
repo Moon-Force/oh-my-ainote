@@ -12,9 +12,18 @@ import com.moonforce.ohmyainote.document.model.StockBrush
 import com.moonforce.ohmyainote.document.model.StrokePoint
 import com.moonforce.ohmyainote.document.model.StrokeRecord
 import com.moonforce.ohmyainote.document.model.StrokeTool
+import com.moonforce.ohmyainote.document.model.TEXT_MIN_READER_VERSION
+import com.moonforce.ohmyainote.document.model.TextRecord
+import com.moonforce.ohmyainote.document.format.PageCodec
+import com.moonforce.ohmyainote.document.model.READER_CAPABILITY
+import com.moonforce.ohmyainote.document.model.NotebookManifest
+import com.moonforce.ohmyainote.document.model.NotebookKind
+import com.moonforce.ohmyainote.document.model.PageSpec
+import com.moonforce.ohmyainote.document.model.validate
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
@@ -145,6 +154,81 @@ class LocalNotebookStoreTest {
             assertEquals(2, reopened.page(PageId("0003")).page.index)
             assertFalse("0099" in io.listPageIds())
         }
+    }
+
+    @Test
+    fun replaceStrokesWithTextBumpsMinReaderVersionAndRoundTrips() = withTempDirectory { root ->
+        runBlocking {
+            val store = LocalNotebookStore(root)
+            val notebook = store.createTemplate("Pad", PaperKind.BLANK)
+            val session = store.open(notebook)
+            val stroke = sampleStroke()
+            session.appendStrokes(PageId("0001"), listOf(stroke))
+            val text = TextRecord(
+                id = "text-1",
+                text = "你好",
+                x = 1f,
+                y = 2f,
+                fontSizePt = 12f,
+                color = "#FF000000",
+                aabb = com.moonforce.ohmyainote.document.model.PageRect(1f, 2f, 25f, 14f),
+                createdAt = "2026-01-01T00:00:00Z",
+            )
+
+            session.replaceStrokesWithText(PageId("0001"), setOf(stroke.id), text)
+
+            val snapshot = session.page(PageId("0001"))
+            assertEquals(emptyList<String>(), snapshot.strokes.map { it.id })
+            assertEquals(listOf("你好"), snapshot.page.texts.map { it.text })
+            assertEquals(TEXT_MIN_READER_VERSION, session.manifest.value.minReaderVersion)
+            val decoded = PageCodec.decode(PageCodec.encode(snapshot.page))
+            assertEquals("你好", decoded.texts.single().text)
+        }
+    }
+
+    @Test
+    fun restoreStrokesRemovingTextPutsInkBack() = withTempDirectory { root ->
+        runBlocking {
+            val store = LocalNotebookStore(root)
+            val notebook = store.createTemplate("Pad", PaperKind.BLANK)
+            val session = store.open(notebook)
+            val stroke = sampleStroke()
+            session.appendStrokes(PageId("0001"), listOf(stroke))
+            val text = TextRecord(
+                id = "text-1",
+                text = "你好",
+                x = 1f,
+                y = 2f,
+                fontSizePt = 12f,
+                color = "#FF000000",
+                aabb = com.moonforce.ohmyainote.document.model.PageRect(1f, 2f, 25f, 14f),
+                createdAt = "2026-01-01T00:00:00Z",
+            )
+            session.replaceStrokesWithText(PageId("0001"), setOf(stroke.id), text)
+            session.restoreStrokesRemovingText(PageId("0001"), listOf(stroke), text.id)
+
+            val snapshot = session.page(PageId("0001"))
+            assertEquals(listOf("stroke-1"), snapshot.strokes.map { it.id })
+            assertEquals(0, snapshot.page.texts.size)
+        }
+    }
+
+    @Test
+    fun readerAcceptsMinReaderVersionTwo() {
+        val manifest = NotebookManifest(
+            id = "11111111-1111-1111-1111-111111111111",
+            title = "Pad",
+            kind = NotebookKind.TEMPLATE,
+            createdAt = "2026-01-01T00:00:00Z",
+            updatedAt = "2026-01-01T00:00:00Z",
+            pageCount = 1,
+            pageOrder = listOf("0001"),
+            defaultPage = PageSpec(),
+            template = com.moonforce.ohmyainote.document.model.TemplateSpec(PaperKind.BLANK),
+            minReaderVersion = TEXT_MIN_READER_VERSION,
+        )
+        manifest.validate()
+        assertTrue(TEXT_MIN_READER_VERSION <= READER_CAPABILITY)
     }
 
     @Test

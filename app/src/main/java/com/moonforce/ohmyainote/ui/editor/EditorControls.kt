@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +76,7 @@ internal fun EditorStudioToolbar(
     onSize: (Float) -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onToggleHwr: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -117,9 +119,14 @@ internal fun EditorStudioToolbar(
                     tonalElevation = 2.dp,
                     shadowElevation = 3.dp,
                 ) {
-                    Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)) {
+                    Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                         HistoryButton(R.drawable.ic_undo, "撤销", state.canUndo, onUndo)
                         HistoryButton(R.drawable.ic_redo, "重做", state.canRedo, onRedo)
+                        HwrToggleButton(
+                            enabled = state.hwrEnabled,
+                            downloading = state.hwrDownloading,
+                            onClick = onToggleHwr,
+                        )
                     }
                 }
             }
@@ -177,6 +184,42 @@ private fun ToolModeButton(
                 }
             }
             Text(item.label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun HwrToggleButton(enabled: Boolean, downloading: Boolean, onClick: () -> Unit) {
+    val containerColor by animateColorAsState(
+        if (enabled) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        label = "hwrContainer",
+    )
+    val contentColor by animateColorAsState(
+        if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        label = "hwrContent",
+    )
+    Surface(
+        onClick = onClick,
+        enabled = !downloading,
+        modifier = Modifier.size(48.dp).semantics {
+            this.selected = enabled
+            role = Role.Switch
+            contentDescription = when {
+                downloading -> "正在下载手写识别模型"
+                enabled -> "关闭手写转标准字"
+                else -> "打开手写转标准字"
+            }
+        },
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        contentColor = contentColor,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (downloading) {
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(painterResource(R.drawable.ic_hwr), contentDescription = null, modifier = Modifier.size(24.dp))
+            }
         }
     }
 }

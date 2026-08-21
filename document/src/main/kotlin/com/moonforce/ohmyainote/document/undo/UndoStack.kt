@@ -3,6 +3,7 @@ package com.moonforce.ohmyainote.document.undo
 import com.moonforce.ohmyainote.document.model.AiCardRecord
 import com.moonforce.ohmyainote.document.model.PageSnapshot
 import com.moonforce.ohmyainote.document.model.StrokeRecord
+import com.moonforce.ohmyainote.document.model.TextRecord
 
 fun interface StateWriter<S> {
     suspend fun write(state: S)
@@ -65,6 +66,25 @@ sealed interface PageCommand : UndoableCommand<PageSnapshot> {
     data class DeleteCard(val card: AiCardRecord) : PageCommand {
         override fun apply(state: PageSnapshot) = state.copy(page = state.page.copy(cards = state.page.cards.filterNot { it.id == card.id }))
         override fun revert(state: PageSnapshot) = state.copy(page = state.page.copy(cards = state.page.cards + card))
+    }
+
+    data class ReplaceStrokesWithText(val records: List<StrokeRecord>, val text: TextRecord) : PageCommand {
+        override fun apply(state: PageSnapshot): PageSnapshot {
+            val ids = records.map { it.id }.toSet()
+            val remaining = state.strokes.filterNot { it.id in ids }
+            val next = state.withStrokes(remaining)
+            return next.copy(page = next.page.copy(texts = next.page.texts + text))
+        }
+
+        override fun revert(state: PageSnapshot): PageSnapshot {
+            val next = state.withStrokes(state.strokes + records)
+            return next.copy(page = next.page.copy(texts = next.page.texts.filterNot { it.id == text.id }))
+        }
+    }
+
+    data class RemoveTexts(val texts: List<TextRecord>) : PageCommand {
+        override fun apply(state: PageSnapshot) = state.copy(page = state.page.copy(texts = state.page.texts.filterNot { candidate -> texts.any { it.id == candidate.id } }))
+        override fun revert(state: PageSnapshot) = state.copy(page = state.page.copy(texts = state.page.texts + texts))
     }
 }
 

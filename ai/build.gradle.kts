@@ -19,4 +19,6 @@ dependencies {
     implementation(project(":ai-api"))
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 }

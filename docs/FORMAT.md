@@ -35,13 +35,13 @@ pages/{pageId}/strokes.bin
 
 ## Manifest
 
-必填：`formatVersion=1`、`minReaderVersion=1`、UUID `id`、`title`、`kind`、UTC 时间、`pageCount`、`pageOrder` 与 `defaultPage`。`kind` 仅为 `template|pdf|image`。模板、PDF source 与 image source 是互斥 tagged data；所有页面背景必须匹配 manifest kind。重复导入时可写 `importedFromId` 记录原包 ID，但当前工作副本的 `id` 必须是新 UUID。
+必填：`formatVersion=1`、`minReaderVersion`（无标准字时为 `1`，一旦某页含 `texts` 则为 `2`）、UUID `id`、`title`、`kind`、UTC 时间、`pageCount`、`pageOrder` 与 `defaultPage`。`kind` 仅为 `template|pdf|image`。模板、PDF source 与 image source 是互斥 tagged data；所有页面背景必须匹配 manifest kind。重复导入时可写 `importedFromId` 记录原包 ID，但当前工作副本的 `id` 必须是新 UUID。
 
-未知的未来字段应忽略；`formatVersion` 或 `minReaderVersion` 高于阅读器能力时拒绝打开。
+未知的未来字段应忽略；`formatVersion` 或 `minReaderVersion` 高于阅读器能力时拒绝打开。当前阅读器能力为 `2`：可打开 `minReaderVersion=2` 的笔记（含纸面标准字）。旧阅读器能力为 `1`，遇到 `minReaderVersion=2` 必须拒绝，因为转写会删除对应墨水，忽略 `texts` 会丢正文。
 
 ## Page
 
-页面保存 `id/index/widthPt/heightPt/background/strokes/cards`。PDF 背景必须同时保存 `sourcePath/pdfPageIndex/rotate/mediaBox/cropBox`。`rotate` 只能是 0、90、180、270。
+页面保存 `id/index/widthPt/heightPt/background/strokes/cards/texts`。PDF 背景必须同时保存 `sourcePath/pdfPageIndex/rotate/mediaBox/cropBox`。`rotate` 只能是 0、90、180、270。
 
 笔画元数据保存 UUID、工具、brush ID、ARGB、size、epsilon、起始时间、二进制 offset/length、point count 与 AABB。AABB 仅用于整笔橡皮粗筛。`stockBrush` 字段保留历史命名，v1 允许：
 
@@ -52,6 +52,8 @@ pages/{pageId}/strokes.bin
 笔刷 ID 是持久化语义，不得把自定义笔刷冒充 `PRESSURE_PEN`；后续调整曲线必须新增版本化 ID。
 
 已插入卡片保存绑定选区、固定 anchor、问答、缩略图路径、model 与创建时间。未插入 AI 浮层不属于格式。
+
+纸面标准字（手写转写结果）保存在 `texts`：UUID、字符串、左上角 page-pt `(x,y)`、`fontSizePt`、ARGB、AABB 与创建时间。AABB 供整笔橡皮整段删除。标准字不可点选编辑；撤销一次转写会恢复被替换的钢笔笔画。有任意 `texts` 的笔记必须把 manifest `minReaderVersion` 升到 `2`。
 
 ## OmaInputsV1
 

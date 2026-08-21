@@ -22,6 +22,7 @@ import com.moonforce.ohmyainote.document.model.PdfRect
 import com.moonforce.ohmyainote.document.model.StockBrush
 import com.moonforce.ohmyainote.document.model.StrokeRecord
 import com.moonforce.ohmyainote.document.model.TemplateSpec
+import com.moonforce.ohmyainote.document.model.TextRecord
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
@@ -39,7 +40,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class FlattenedPdfExporter {
+class FlattenedPdfExporter(private val color: ArgbColor = AndroidArgbColor) {
     suspend fun export(
         manifest: NotebookManifest,
         notebookDir: Path,
@@ -76,6 +77,7 @@ class FlattenedPdfExporter {
                 ).use { stream ->
                     if (!append) drawNewPageBackground(document, stream, manifest, snapshot, notebookDir)
                     drawStrokes(stream, snapshot, options.pressureVarying)
+                    snapshot.page.texts.forEach { drawText(document, stream, snapshot, it) }
                     snapshot.page.cards.forEach { drawCard(document, stream, snapshot, notebookDir, it) }
                 }
                 progress.onPage(index + 1, manifest.pageCount)
@@ -113,13 +115,13 @@ class FlattenedPdfExporter {
     }
 
     private fun drawTemplate(stream: PDPageContentStream, template: TemplateSpec) {
-        val background = Color.parseColor(template.backgroundColor)
-        stream.setNonStrokingColor(Color.red(background), Color.green(background), Color.blue(background))
+        val background = color.parse(template.backgroundColor)
+        stream.setNonStrokingColor(color.red(background), color.green(background), color.blue(background))
         stream.addRect(0f, 0f, template.widthPt, template.heightPt)
         stream.fill()
         if (template.paper == PaperKind.BLANK) return
-        val rule = Color.parseColor(template.ruleColor)
-        stream.setStrokingColor(Color.red(rule), Color.green(rule), Color.blue(rule))
+        val rule = color.parse(template.ruleColor)
+        stream.setStrokingColor(color.red(rule), color.green(rule), color.blue(rule))
         stream.setLineWidth(0.5f)
         var offset = template.lineSpacingPt
         while (offset < template.heightPt) {
@@ -156,11 +158,11 @@ class FlattenedPdfExporter {
         }
         snapshot.strokes.forEach { stroke ->
             if (stroke.points.isEmpty()) return@forEach
-            val color = Color.parseColor(stroke.color)
-            val alpha = if (stroke.stockBrush == StockBrush.HIGHLIGHTER) 0.35f else Color.alpha(color) / 255f
+            val colorArgb = color.parse(stroke.color)
+            val alpha = if (stroke.stockBrush == StockBrush.HIGHLIGHTER) 0.35f else color.alpha(colorArgb) / 255f
             stream.saveGraphicsState()
             setAlpha(alpha)
-            stream.setStrokingColor(Color.red(color), Color.green(color), Color.blue(color))
+            stream.setStrokingColor(color.red(colorArgb), color.green(colorArgb), color.blue(colorArgb))
             stream.setLineCapStyle(1)
             stream.setLineJoinStyle(1)
             if (stroke.points.size == 1) {
@@ -208,6 +210,50 @@ class FlattenedPdfExporter {
                 stream.stroke()
             }
             stream.restoreGraphicsState()
+        }
+    }
+
+    private fun drawText(
+        document: PDDocument,
+        stream: PDPageContentStream,
+        snapshot: PageSnapshot,
+        record: TextRecord,
+    ) {
+        val scale = 2f
+        val width = max(1, (record.aabb.width * scale).toInt())
+        val height = max(1, (record.aabb.height * scale).toInt())
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.parseColor(record.color)
+                textSize = record.fontSizePt * scale
+                isSubpixelText = true
+            }
+            canvas.drawText(record.text, 0f, record.fontSizePt * scale * 0.8f, paint)
+            val image = LosslessFactory.createFromImage(document, bitmap)
+            val transform: (PagePoint) -> PagePoint = when (val background = snapshot.page.background) {
+                is PageBackground.PdfPage -> { point -> pageToPdfUserSpace(point, background.cropBox, background.rotate) }
+                else -> { point -> pageToPdfUserSpace(point, PdfRect(0f, 0f, snapshot.page.widthPt, snapshot.page.heightPt), 0) }
+            }
+            val left = record.aabb.l
+            val top = record.aabb.t
+            val right = record.aabb.r
+            val bottom = record.aabb.b
+            val bottomLeft = transform(PagePoint(left, bottom))
+            val bottomRight = transform(PagePoint(right, bottom))
+            val topLeft = transform(PagePoint(left, top))
+            val matrix = Matrix(
+                bottomRight.x - bottomLeft.x,
+                bottomRight.y - bottomLeft.y,
+                topLeft.x - bottomLeft.x,
+                topLeft.y - bottomLeft.y,
+                bottomLeft.x,
+                bottomLeft.y,
+            )
+            stream.drawImage(image, matrix)
+        } finally {
+            bitmap.recycle()
         }
     }
 

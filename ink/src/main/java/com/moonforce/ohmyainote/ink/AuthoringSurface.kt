@@ -2,6 +2,8 @@ package com.moonforce.ohmyainote.ink
 
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Path
 import androidx.ink.authoring.compose.InProgressStrokes
@@ -18,10 +20,18 @@ fun AuthoringSurface(
     modifier: Modifier = Modifier,
     onStrokesFinished: (List<Stroke>) -> Unit,
 ) {
+    val brush = remember(tool, colorArgb, sizePt) { BrushCatalog.create(tool, colorArgb, sizePt) }
+    val currentBrush = rememberUpdatedState(brush)
+    // InProgressShapes keys pointerInput on the transform lambdas, not nextBrush. A stable
+    // viewToPage therefore keeps the first `{ defaultBrush }` forever unless nextBrush reads
+    // latest state at pointer-down.
+    val nextBrush = remember { { currentBrush.value } }
+    val viewToPage = remember(viewport) { viewport.viewToPageCompose() }
     Box(modifier = modifier) {
         InProgressStrokes(
-            defaultBrush = BrushCatalog.create(tool, colorArgb, sizePt),
-            pointerEventToWorldTransform = viewport.viewToPageCompose(),
+            defaultBrush = brush,
+            nextBrush = nextBrush,
+            pointerEventToWorldTransform = viewToPage,
             maskPath = maskPath,
             onStrokesFinished = onStrokesFinished,
         )

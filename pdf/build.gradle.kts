@@ -18,4 +18,6 @@ dependencies {
     implementation(project(":document"))
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.pdfbox.android)
+
+    testImplementation(libs.junit)
 }

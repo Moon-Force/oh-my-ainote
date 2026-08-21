@@ -8,6 +8,9 @@ import com.moonforce.ohmyainote.document.store.LocalNotebookStore
 import com.moonforce.ohmyainote.export.FlattenedPdfExporter
 import com.moonforce.ohmyainote.importing.ImportProcessors
 import com.moonforce.ohmyainote.pdf.PdfImportInspector
+import com.moonforce.ohmyainote.hwr.DigitalInkModelStore
+import com.moonforce.ohmyainote.hwr.HandwritingRecognizer
+import com.moonforce.ohmyainote.hwr.HwrSettingsStore
 import com.moonforce.ohmyainote.ui.editor.PageRasterComposer
 
 class AppContainer(context: Context) {
@@ -20,4 +23,7 @@ class AppContainer(context: Context) {
     val pdfImportInspector = PdfImportInspector()
     val exporter = FlattenedPdfExporter()
     val importProcessors = ImportProcessors(this.context)
+    val hwrSettingsStore = HwrSettingsStore(this.context)
+    val digitalInkModelStore = DigitalInkModelStore()
+    val handwritingRecognizer = HandwritingRecognizer(digitalInkModelStore)
 }

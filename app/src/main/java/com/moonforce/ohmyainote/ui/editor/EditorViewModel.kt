@@ -1,9 +1,15 @@
 package com.moonforce.ohmyainote.ui.editor
 
 import android.content.Intent
+import androidx.annotation.VisibleForTesting
 import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.view.Choreographer
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import androidx.ink.strokes.Stroke
 import androidx.lifecycle.ViewModel
@@ -17,7 +23,9 @@ import com.moonforce.ohmyainote.document.model.PageId
 import com.moonforce.ohmyainote.document.model.PageRect
 import com.moonforce.ohmyainote.document.model.PageSnapshot
 import com.moonforce.ohmyainote.document.model.Sink
+import com.moonforce.ohmyainote.document.format.DigitalInkGeometry
 import com.moonforce.ohmyainote.document.model.StrokeRecord
+import com.moonforce.ohmyainote.document.model.TextRecord
 import com.moonforce.ohmyainote.document.store.NotebookSession
 import com.moonforce.ohmyainote.export.ExportOptions
 import com.moonforce.ohmyainote.ink.BrushCatalog
@@ -25,6 +33,8 @@ import com.moonforce.ohmyainote.ink.FinishedStroke
 import com.moonforce.ohmyainote.ink.StrokeBridge
 import com.moonforce.ohmyainote.ink.Tool
 import com.moonforce.ohmyainote.ink.eraseIntersectingStrokes
+import com.moonforce.ohmyainote.ink.eraseIntersectingTexts
+import java.time.Instant
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
@@ -48,7 +58,6 @@ data class EditorUiState(
     val manifest: NotebookManifest? = null,
     val pageIndex: Int = 0,
     val snapshot: PageSnapshot? = null,
-    val finishedStrokes: List<FinishedStroke> = emptyList(),
     val tool: Tool = Tool.PEN,
     val colorArgb: Int = BrushCatalog.defaultColor(Tool.PEN),
     val brushSizePt: Float = BrushCatalog.defaultSize(Tool.PEN),
@@ -61,6 +70,8 @@ data class EditorUiState(
     val busyMessage: String? = null,
     val error: String? = null,
     val lastDryHandoffMs: Double? = null,
+    val hwrEnabled: Boolean = false,
+    val hwrDownloading: Boolean = false,
 )
 
 class EditorViewModel(
@@ -70,6 +81,14 @@ class EditorViewModel(
     private lateinit var session: NotebookSession
     private val mutableState = MutableStateFlow(EditorUiState())
     val state: StateFlow<EditorUiState> = mutableState.asStateFlow()
+
+    /**
+     * Dry ink presented by [com.moonforce.ohmyainote.ink.FinishedStrokesView].
+     * The editor must [android.view.View.invalidate] that view in the same UI run loop as
+     * [onStrokesFinished]; Compose `StateFlow` collection is one Looper message too late.
+     */
+    var finishedStrokes by mutableStateOf(emptyList<FinishedStroke>(), referentialEqualityPolicy())
+        private set
     private val undo = ArrayDeque<EditorAction>()
     private val redo = ArrayDeque<EditorAction>()
     private val persistenceJobs = mutableSetOf<Job>()
@@ -81,6 +100,9 @@ class EditorViewModel(
     private var highlighterColorArgb = BrushCatalog.defaultColor(Tool.HIGHLIGHTER)
     private var penSizePt = BrushCatalog.defaultSize(Tool.PEN)
     private var highlighterSizePt = BrushCatalog.defaultSize(Tool.HIGHLIGHTER)
+    private val pendingConvertIds = linkedSetOf<String>()
+    private var convertJob: Job? = null
+    private var hwrDownloadGeneration = 0
 
     val notebookDirectory get() = container.context.filesDir.toPath().resolve("notebooks/${notebookId.value}")
     private val notebookDir get() = notebookDirectory
@@ -91,6 +113,7 @@ class EditorViewModel(
                 session = container.notebookStore.open(notebookId)
                 mutableState.update { it.copy(manifest = session.manifest.value) }
                 loadPage(0)
+                restoreHwrToggle()
             }.onFailure(::report)
         }
     }
@@ -98,6 +121,7 @@ class EditorViewModel(
     fun loadPage(index: Int) {
         val manifest = mutableState.value.manifest ?: return
         if (index !in manifest.pageOrder.indices) return
+        cancelPendingConvert()
         val generation = ++loadGeneration
         viewModelScope.launch {
             runCatching {
@@ -106,11 +130,11 @@ class EditorViewModel(
                 if (generation == loadGeneration) {
                     undo.clear()
                     redo.clear()
+                    finishedStrokes = finished
                     mutableState.update {
                         it.copy(
                             pageIndex = index,
                             snapshot = snapshot,
-                            finishedStrokes = finished,
                             overlay = null,
                             canUndo = false,
                             canRedo = false,
@@ -158,7 +182,7 @@ class EditorViewModel(
         mutableState.update { it.copy(brushSizePt = sizePt) }
     }
 
-    /** Called on the UI run loop; dry state is updated before persistence to prevent wet/dry flicker. */
+    /** Called on the UI run loop; dry list is updated so the editor can invalidate the dry View. */
     fun onStrokesFinished(strokes: List<Stroke>) {
         val started = System.nanoTime()
         val current = mutableState.value
@@ -166,25 +190,76 @@ class EditorViewModel(
         if (!current.tool.isWritingTool()) return
         val records = strokes.map { StrokeBridge.fromInk(it, current.tool, current.colorArgb) }
         val finished = records.zip(strokes).map { (record, ink) -> FinishedStroke(record, ink) }
-        applyLocalStrokes(snapshot.strokes + records, current.finishedStrokes + finished)
-        mutableState.update { it.copy(lastDryHandoffMs = (System.nanoTime() - started) / 1_000_000.0) }
-        push(EditorAction.Add(snapshot.page.id, records))
+        val nextRecords = snapshot.strokes + records
+        finishedStrokes = finishedStrokes + finished
+        undo.addLast(EditorAction.Add(snapshot.page.id, records))
+        while (undo.size > 80) undo.removeFirst()
+        redo.clear()
         persist { session.appendStrokes(PageId(snapshot.page.id), records) }
         maybeScheduleCover(snapshot.page.id)
+        if (current.hwrEnabled && current.tool == Tool.PEN) {
+            scheduleConvert(records.map { it.id })
+        }
+        // Keep pager / toolbar StateFlow off this HWUI frame so dry View.invalidate() wins the handoff.
+        Choreographer.getInstance().postFrameCallback {
+            applySnapshotStrokes(nextRecords)
+            mutableState.update {
+                it.copy(
+                    canUndo = undo.isNotEmpty(),
+                    canRedo = redo.isNotEmpty(),
+                    lastDryHandoffMs = (System.nanoTime() - started) / 1_000_000.0,
+                )
+            }
+        }
     }
 
     fun eraseSegment(previousX: Float, previousY: Float, currentX: Float, currentY: Float) {
         val current = mutableState.value
         val snapshot = current.snapshot ?: return
-        val ids = eraseIntersectingStrokes(previousX, previousY, currentX, currentY, current.finishedStrokes)
-        if (ids.isEmpty()) return
-        val removed = snapshot.strokes.filter { it.id in ids }
-        val records = snapshot.strokes.filterNot { it.id in ids }
-        val finished = current.finishedStrokes.filterNot { it.record.id in ids }
+        val strokeIds = eraseIntersectingStrokes(previousX, previousY, currentX, currentY, finishedStrokes)
+        val textIds = eraseIntersectingTexts(previousX, previousY, currentX, currentY, snapshot.page.texts)
+        if (strokeIds.isEmpty() && textIds.isEmpty()) return
+        pendingConvertIds.removeAll(strokeIds)
+        val removedStrokes = snapshot.strokes.filter { it.id in strokeIds }
+        val removedTexts = snapshot.page.texts.filter { it.id in textIds }
+        val records = snapshot.strokes.filterNot { it.id in strokeIds }
+        val finished = finishedStrokes.filterNot { it.record.id in strokeIds }
         applyLocalStrokes(records, finished)
-        push(EditorAction.Remove(snapshot.page.id, removed))
-        persist { session.removeStrokes(PageId(snapshot.page.id), ids) }
+        mutableState.update { state ->
+            val page = state.snapshot?.page ?: return@update state
+            state.copy(snapshot = state.snapshot.copy(page = page.copy(texts = page.texts.filterNot { it.id in textIds })))
+        }
+        push(EditorAction.Erase(snapshot.page.id, removedStrokes, removedTexts))
+        persist { session.removeStrokesAndTexts(PageId(snapshot.page.id), strokeIds, textIds) }
         maybeScheduleCover(snapshot.page.id)
+    }
+
+    fun toggleHandwritingRecognition() {
+        val current = mutableState.value
+        if (current.hwrDownloading) return
+        if (current.hwrEnabled) {
+            cancelPendingConvert()
+            mutableState.update { it.copy(hwrEnabled = false) }
+            viewModelScope.launch { container.hwrSettingsStore.setEnabled(false) }
+            return
+        }
+        val generation = ++hwrDownloadGeneration
+        viewModelScope.launch {
+            mutableState.update { it.copy(hwrDownloading = true, error = null) }
+            runCatching {
+                if (!container.digitalInkModelStore.isDownloaded()) {
+                    container.digitalInkModelStore.download()
+                }
+                container.hwrSettingsStore.setEnabled(true)
+            }.onSuccess {
+                if (generation != hwrDownloadGeneration) return@onSuccess
+                mutableState.update { it.copy(hwrEnabled = true, hwrDownloading = false) }
+            }.onFailure { error ->
+                if (generation != hwrDownloadGeneration) return@onFailure
+                mutableState.update { it.copy(hwrEnabled = false, hwrDownloading = false) }
+                report(error)
+            }
+        }
     }
 
     fun selectForAsk(selection: PageRect) {
@@ -306,6 +381,8 @@ class EditorViewModel(
                 }
                 maybeScheduleCover(action.pageId)
             }
+            is EditorAction.Convert -> if (reverse) revertConvert(snapshot, action) else applyConvert(snapshot, action)
+            is EditorAction.Erase -> if (reverse) restoreErased(snapshot, action) else applyErased(snapshot, action)
         }
     }
 
@@ -317,9 +394,140 @@ class EditorViewModel(
 
     private fun removeRecords(snapshot: PageSnapshot, records: List<StrokeRecord>) {
         val ids = records.map { it.id }.toSet()
+        pendingConvertIds.removeAll(ids)
         val next = snapshot.strokes.filterNot { it.id in ids }
-        applyLocalStrokes(next, mutableState.value.finishedStrokes.filterNot { it.record.id in ids })
+        applyLocalStrokes(next, finishedStrokes.filterNot { it.record.id in ids })
         persist { session.removeStrokes(PageId(snapshot.page.id), ids) }
+    }
+
+    private fun applyConvert(snapshot: PageSnapshot, action: EditorAction.Convert) {
+        val ids = action.strokes.map { it.id }.toSet()
+        pendingConvertIds.removeAll(ids)
+        val next = snapshot.strokes.filterNot { it.id in ids }
+        applyLocalStrokes(next, finishedStrokes.filterNot { it.record.id in ids })
+        insertTexts(listOf(action.text))
+        persist { session.replaceStrokesWithText(PageId(action.pageId), ids, action.text) }
+        maybeScheduleCover(action.pageId)
+    }
+
+    private fun revertConvert(snapshot: PageSnapshot, action: EditorAction.Convert) {
+        pendingConvertIds.removeAll(action.strokes.map { it.id })
+        val next = snapshot.strokes + action.strokes
+        applyLocalStrokes(next, StrokeBridge.load(next))
+        removeTexts(setOf(action.text.id))
+        persist { session.restoreStrokesRemovingText(PageId(action.pageId), action.strokes, action.text.id) }
+        maybeScheduleCover(action.pageId)
+    }
+
+    private fun applyErased(snapshot: PageSnapshot, action: EditorAction.Erase) {
+        val strokeIds = action.strokes.map { it.id }.toSet()
+        val textIds = action.texts.map { it.id }.toSet()
+        pendingConvertIds.removeAll(strokeIds)
+        val next = snapshot.strokes.filterNot { it.id in strokeIds }
+        applyLocalStrokes(next, finishedStrokes.filterNot { it.record.id in strokeIds })
+        removeTexts(textIds)
+        persist { session.removeStrokesAndTexts(PageId(action.pageId), strokeIds, textIds) }
+        maybeScheduleCover(action.pageId)
+    }
+
+    private fun restoreErased(snapshot: PageSnapshot, action: EditorAction.Erase) {
+        val next = snapshot.strokes + action.strokes
+        applyLocalStrokes(next, StrokeBridge.load(next))
+        insertTexts(action.texts)
+        persist { session.insertStrokesAndTexts(PageId(action.pageId), action.strokes, action.texts) }
+        maybeScheduleCover(action.pageId)
+    }
+
+    private fun insertTexts(texts: List<TextRecord>) {
+        if (texts.isEmpty()) return
+        mutableState.update { current ->
+            val snapshot = current.snapshot ?: return@update current
+            current.copy(snapshot = snapshot.copy(page = snapshot.page.copy(texts = snapshot.page.texts + texts)))
+        }
+    }
+
+    private fun removeTexts(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        mutableState.update { current ->
+            val snapshot = current.snapshot ?: return@update current
+            current.copy(snapshot = snapshot.copy(page = snapshot.page.copy(texts = snapshot.page.texts.filterNot { it.id in ids })))
+        }
+    }
+
+    private fun scheduleConvert(ids: List<String>) {
+        if (ids.isEmpty()) return
+        pendingConvertIds += ids
+        convertJob?.cancel()
+        convertJob = viewModelScope.launch {
+            delay(convertDelayMs)
+            commitPendingConvert()
+        }
+    }
+
+    @VisibleForTesting
+    internal var convertDelayMs: Long = CONVERT_DELAY_MS
+        set(value) {
+            field = value
+        }
+
+    @VisibleForTesting
+    internal suspend fun commitPendingConvertForTest() = commitPendingConvert()
+
+    private fun cancelPendingConvert() {
+        convertJob?.cancel()
+        convertJob = null
+        pendingConvertIds.clear()
+    }
+
+    private suspend fun commitPendingConvert() {
+        val current = mutableState.value
+        val snapshot = current.snapshot ?: return
+        if (!current.hwrEnabled) return
+        val ids = pendingConvertIds.toList()
+        pendingConvertIds.removeAll(ids)
+        val pens = DigitalInkGeometry.penStrokes(snapshot.strokes.filter { it.id in ids })
+        if (pens.isEmpty()) return
+        awaitPersistence()
+        val live = mutableState.value.snapshot ?: return
+        val stillPresent = DigitalInkGeometry.penStrokes(live.strokes.filter { stroke -> pens.any { it.id == stroke.id } })
+        if (stillPresent.isEmpty()) return
+        val recognized = runCatching { container.handwritingRecognizer.recognize(stillPresent) }
+            .onFailure(::report)
+            .getOrNull()
+        if (recognized.isNullOrBlank()) {
+            if (recognized != null) {
+                mutableState.update { it.copy(error = "无法识别这串笔迹") }
+            }
+            return
+        }
+        val latest = mutableState.value.snapshot ?: return
+        if (stillPresent.any { stroke -> latest.strokes.none { it.id == stroke.id } }) return
+        val text = DigitalInkGeometry.placement(
+            stillPresent,
+            recognized,
+            UUID.randomUUID().toString(),
+            Instant.now().toString(),
+        )
+        applyConvert(latest, EditorAction.Convert(latest.page.id, stillPresent, text))
+        push(EditorAction.Convert(latest.page.id, stillPresent, text))
+    }
+
+    private suspend fun restoreHwrToggle() {
+        if (!container.hwrSettingsStore.isEnabled()) return
+        val generation = ++hwrDownloadGeneration
+        mutableState.update { it.copy(hwrDownloading = true) }
+        runCatching {
+            if (!container.digitalInkModelStore.isDownloaded()) {
+                container.digitalInkModelStore.download()
+            }
+        }.onSuccess {
+            if (generation != hwrDownloadGeneration) return
+            mutableState.update { it.copy(hwrEnabled = true, hwrDownloading = false) }
+        }.onFailure { error ->
+            if (generation != hwrDownloadGeneration) return
+            mutableState.update { it.copy(hwrEnabled = false, hwrDownloading = false) }
+            report(error)
+        }
     }
 
     fun addTemplatePage() {
@@ -348,6 +556,7 @@ class EditorViewModel(
     fun close(onClosed: () -> Unit) {
         viewModelScope.launch {
             runCatching {
+                convertJob?.cancel()
                 awaitPersistence()
                 coverRefreshJob?.cancel()
                 updateCover()
@@ -464,11 +673,15 @@ class EditorViewModel(
     fun clearError() = mutableState.update { it.copy(error = null, aiLoading = false, busyMessage = null) }
 
     private fun applyLocalStrokes(records: List<StrokeRecord>, finished: List<FinishedStroke>) {
+        finishedStrokes = finished
+        applySnapshotStrokes(records)
+    }
+
+    private fun applySnapshotStrokes(records: List<StrokeRecord>) {
         mutableState.update { current ->
             val snapshot = current.snapshot ?: return@update current
             current.copy(
                 snapshot = snapshot.copy(page = snapshot.page.copy(strokes = records), strokes = records),
-                finishedStrokes = finished,
             )
         }
     }
@@ -540,10 +753,21 @@ class EditorViewModel(
 
     private fun Tool.isWritingTool() = this == Tool.PEN || this == Tool.HIGHLIGHTER
 
+    override fun onCleared() {
+        convertJob?.cancel()
+        super.onCleared()
+    }
+
     private sealed interface EditorAction {
         val pageId: String
         data class Add(override val pageId: String, val records: List<StrokeRecord>) : EditorAction
         data class Remove(override val pageId: String, val records: List<StrokeRecord>) : EditorAction
         data class InsertCard(override val pageId: String, val card: AiCardRecord) : EditorAction
+        data class Convert(override val pageId: String, val strokes: List<StrokeRecord>, val text: TextRecord) : EditorAction
+        data class Erase(override val pageId: String, val strokes: List<StrokeRecord>, val texts: List<TextRecord>) : EditorAction
+    }
+
+    private companion object {
+        const val CONVERT_DELAY_MS = 2_000L
     }
 }

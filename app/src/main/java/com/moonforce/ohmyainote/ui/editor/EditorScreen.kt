@@ -64,6 +64,7 @@ import com.moonforce.ohmyainote.document.model.PagePoint
 import com.moonforce.ohmyainote.document.model.PageRect
 import com.moonforce.ohmyainote.ink.AuthoringSurface
 import com.moonforce.ohmyainote.ink.FinishedStrokesLayer
+import com.moonforce.ohmyainote.ink.FinishedStrokesView
 import com.moonforce.ohmyainote.ink.Tool
 import com.moonforce.ohmyainote.ink.ViewportState
 import com.moonforce.ohmyainote.ink.routeEditorPointers
@@ -103,6 +104,7 @@ fun EditorScreen(
     var lastMoveToFrameMs by remember { mutableFloatStateOf(0f) }
     val tileProvider = remember(viewModel) { PdfTileProvider() }
     DisposableEffect(tileProvider) { onDispose { tileProvider.close() } }
+    val dryInkView = remember { arrayOfNulls<FinishedStrokesView>(1) }
     val pdfExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         uri?.let(viewModel::exportPdf)
     }
@@ -298,6 +300,7 @@ fun EditorScreen(
                 onSize = viewModel::setBrushSize,
                 onUndo = viewModel::undo,
                 onRedo = viewModel::redo,
+                onToggleHwr = viewModel::toggleHandwritingRecognition,
                 modifier = Modifier.fillMaxWidth().height(140.dp),
             )
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -322,26 +325,32 @@ fun EditorScreen(
                             Box(Modifier.fillMaxSize()) {
                                 BackgroundLayer(
                                     manifest,
-                                    snapshot,
-                                    notebookDir = viewModel.notebookDirectory,
+                                    background = snapshot.page.background,
+                                    pageWidthPt = snapshot.page.widthPt,
+                                    pageHeightPt = snapshot.page.heightPt,
+                                    notebookDir = viewModel.notebookDirectory.toString(),
                                     viewport = viewport,
                                     viewSize = viewSize,
                                     tileProvider = tileProvider,
                                     pageCount = manifest.pageCount,
                                 )
-                                FinishedStrokesLayer(state.finishedStrokes, viewport)
+                                TextLayer(snapshot, viewport)
                                 AiCardLayer(snapshot, viewModel.notebookDirectory, viewport)
                             }
                         }
                     }
                     if (snapshot != null) {
+                        DryStrokesLayer(viewModel, viewport) { dryInkView[0] = it }
                         AuthoringSurface(
                             viewport = viewport,
                             tool = state.tool,
                             colorArgb = state.colorArgb,
                             sizePt = state.brushSizePt,
                             modifier = Modifier.fillMaxSize(),
-                            onStrokesFinished = viewModel::onStrokesFinished,
+                            onStrokesFinished = { strokes ->
+                                viewModel.onStrokesFinished(strokes)
+                                dryInkView[0]?.present(viewModel.finishedStrokes, viewport)
+                            },
                         )
                     }
                     if (boxStart != null && boxEnd != null) {
@@ -365,7 +374,7 @@ fun EditorScreen(
                         val handoff = state.lastDryHandoffMs?.let { "%.2f".format(it) } ?: "—"
                         val moveFrame = if (lastWetMoveNanos > 0L) "%.2f".format(lastMoveToFrameMs) else "—"
                         Text(
-                            "dry handoff ${handoff} ms · move→frame ${moveFrame} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${state.finishedStrokes.size} · tiles ${tileProvider.tileCount} · tile cache ${"%.1f".format(tileProvider.cacheBytes / 1048576f)} MB",
+                            "dry handoff ${handoff} ms · move→frame ${moveFrame} ms · scale ${"%.2f".format(viewport.scale)} · meshes ${viewModel.finishedStrokes.size} · tiles ${tileProvider.tileCount} · tile cache ${"%.1f".format(tileProvider.cacheBytes / 1048576f)} MB",
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xB0000000)).padding(6.dp),
@@ -493,6 +502,15 @@ fun EditorScreen(
             confirmButton = { TextButton(onClick = viewModel::clearError) { Text("确定") } },
         )
     }
+}
+
+@Composable
+private fun DryStrokesLayer(
+    viewModel: EditorViewModel,
+    viewport: ViewportState,
+    onViewReady: (FinishedStrokesView) -> Unit,
+) {
+    FinishedStrokesLayer(viewModel.finishedStrokes, viewport, onViewReady = onViewReady)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

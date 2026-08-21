@@ -29,4 +29,6 @@ dependencies {
     implementation(libs.androidx.ink.geometry.compose)
     implementation(libs.androidx.ink.rendering)
     implementation(libs.androidx.ink.strokes)
+
+    testImplementation(libs.junit)
 }

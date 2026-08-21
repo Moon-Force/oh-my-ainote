@@ -30,7 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-private data class TilePlan(
+internal data class TilePlan(
     val pageIndex: Int,
     val tilePt: Float,
     val x0: Int,
@@ -39,7 +39,7 @@ private data class TilePlan(
     val y1: Int,
 )
 
-private fun visibleTilePlan(
+internal fun visibleTilePlan(
     viewport: ViewportState,
     viewSize: IntSize,
     pageWidthPt: Float,
@@ -73,16 +73,16 @@ private fun visibleTilePlan(
 @Composable
 fun BackgroundLayer(
     manifest: NotebookManifest,
-    snapshot: PageSnapshot,
-    notebookDir: Path,
+    background: PageBackground,
+    pageWidthPt: Float,
+    pageHeightPt: Float,
+    notebookDir: String,
     viewport: ViewportState,
     viewSize: IntSize,
     tileProvider: PdfTileProvider,
     pageCount: Int,
     modifier: Modifier = Modifier,
 ) {
-    val background = snapshot.page.background
-    val page = snapshot.page
     val pdf = background as? PageBackground.PdfPage
     val scaleBucket = when {
         viewport.scale <= 1.25f -> 1.25f
@@ -91,20 +91,20 @@ fun BackgroundLayer(
         else -> 8f
     }
 
-    val tilePlan = remember(background, scaleBucket, viewport, viewSize, page.widthPt, page.heightPt) {
+    val tilePlan = remember(background, scaleBucket, viewport, viewSize, pageWidthPt, pageHeightPt) {
         if (pdf == null || viewSize.width <= 0 || viewSize.height <= 0) null
-        else visibleTilePlan(viewport, viewSize, page.widthPt, page.heightPt, scaleBucket, pdf.pdfPageIndex)
+        else visibleTilePlan(viewport, viewSize, pageWidthPt, pageHeightPt, scaleBucket, pdf.pdfPageIndex)
     }
     val tileVersion = remember { mutableIntStateOf(0) }
 
     LaunchedEffect(tilePlan) {
         val plan = tilePlan ?: return@LaunchedEffect
         val source = pdf ?: return@LaunchedEffect
-        val file = notebookDir.resolve(source.sourcePath).toFile()
+        val file = Path.of(notebookDir).resolve(source.sourcePath).toFile()
         val renderTile: suspend (tx: Int, ty: Int, pageIndex: Int) -> Unit = { tx, ty, pageIndex ->
             val key = TileKey(manifest.id, pageIndex, scaleBucket, tx, ty)
             if (tileProvider.cache.get(key) == null) {
-                tileProvider.tile(key, file, page.widthPt, page.heightPt, tx * plan.tilePt, ty * plan.tilePt, plan.tilePt, PDF_TILE_PX)
+                tileProvider.tile(key, file, pageWidthPt, pageHeightPt, tx * plan.tilePt, ty * plan.tilePt, plan.tilePt, PDF_TILE_PX)
                 tileVersion.value++
             }
         }
@@ -118,7 +118,7 @@ fun BackgroundLayer(
 
     val imageBitmap by produceState<Bitmap?>(initialValue = null, key1 = background) {
         value = if (background is PageBackground.Image) {
-            withContext(Dispatchers.IO) { BitmapFactory.decodeFile(notebookDir.resolve(background.sourcePath).toString()) }
+            withContext(Dispatchers.IO) { BitmapFactory.decodeFile(Path.of(notebookDir).resolve(background.sourcePath).toString()) }
         } else {
             null
         }
@@ -128,7 +128,7 @@ fun BackgroundLayer(
         val native = drawContext.canvas.nativeCanvas
         val pageToView = viewport.pageToView
         val topLeft = pageToView.transform(PagePoint(0f, 0f))
-        val bottomRight = pageToView.transform(PagePoint(page.widthPt, page.heightPt))
+        val bottomRight = pageToView.transform(PagePoint(pageWidthPt, pageHeightPt))
         val destination = RectF(topLeft.x, topLeft.y, bottomRight.x, bottomRight.y)
         when (background) {
             is PageBackground.Template -> {
@@ -136,23 +136,23 @@ fun BackgroundLayer(
                 native.save()
                 native.concat(viewport.pageToViewAndroid())
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor(template.backgroundColor) }
-                native.drawRect(0f, 0f, page.widthPt, page.heightPt, paint)
+                native.drawRect(0f, 0f, pageWidthPt, pageHeightPt, paint)
                 if (background.paper != PaperKind.BLANK) {
                     paint.color = AndroidColor.parseColor(template.ruleColor)
                     paint.strokeWidth = 0.5f
                     var offset = template.lineSpacingPt
-                    while (offset < page.heightPt) {
-                        native.drawLine(0f, offset, page.widthPt, offset, paint)
+                    while (offset < pageHeightPt) {
+                        native.drawLine(0f, offset, pageWidthPt, offset, paint)
                         offset += template.lineSpacingPt
                     }
                     if (background.paper == PaperKind.GRID) {
                         offset = template.lineSpacingPt
-                        while (offset < page.widthPt) {
-                            native.drawLine(offset, 0f, offset, page.heightPt, paint)
+                        while (offset < pageWidthPt) {
+                            native.drawLine(offset, 0f, offset, pageHeightPt, paint)
                             offset += template.lineSpacingPt
                         }
                     } else {
-                        native.drawLine(template.marginLeftPt, 0f, template.marginLeftPt, page.heightPt, paint)
+                        native.drawLine(template.marginLeftPt, 0f, template.marginLeftPt, pageHeightPt, paint)
                     }
                 }
                 native.restore()
@@ -175,6 +175,25 @@ fun BackgroundLayer(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun TextLayer(snapshot: PageSnapshot, viewport: ViewportState, modifier: Modifier = Modifier) {
+    Canvas(modifier.fillMaxSize()) {
+        if (snapshot.page.texts.isEmpty()) return@Canvas
+        val canvas = drawContext.canvas.nativeCanvas
+        canvas.save()
+        canvas.concat(viewport.pageToViewAndroid())
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            isSubpixelText = true
+        }
+        snapshot.page.texts.forEach { record ->
+            paint.color = AndroidColor.parseColor(record.color)
+            paint.textSize = record.fontSizePt
+            canvas.drawText(record.text, record.x, record.y + record.fontSizePt * 0.8f, paint)
+        }
+        canvas.restore()
     }
 }
 

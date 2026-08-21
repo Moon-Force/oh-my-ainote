@@ -11,8 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -23,6 +27,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -42,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moonforce.ohmyainote.document.model.NotebookSummary
@@ -101,8 +108,12 @@ fun LibraryScreen(
                         Box(Modifier.weight(1f)) {
                             FolderButton(folder.name, state.selectedFolderId == folder.id) { viewModel.selectFolder(folder.id) }
                         }
-                        TextButton(onClick = { viewModel.deleteFolder(folder.id) }) { Text("×") }
-                        TextButton(onClick = { renameFolderTarget = folder }) { Text("改") }
+                        IconButton(onClick = { viewModel.deleteFolder(folder.id) }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Close, contentDescription = "删除文件夹")
+                        }
+                        IconButton(onClick = { renameFolderTarget = folder }, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.Filled.Edit, contentDescription = "重命名文件夹")
+                        }
                     }
                 }
                 OutlinedButton(onClick = { createFolder = true }, modifier = Modifier.fillMaxWidth()) { Text("新建文件夹") }
@@ -170,7 +181,12 @@ fun LibraryScreen(
 
 @Composable
 private fun FolderButton(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

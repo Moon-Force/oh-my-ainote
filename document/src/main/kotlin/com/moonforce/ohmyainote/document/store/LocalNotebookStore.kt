@@ -21,7 +21,9 @@ import com.moonforce.ohmyainote.document.model.PaperKind
 import com.moonforce.ohmyainote.document.model.Sink
 import com.moonforce.ohmyainote.document.model.SourceFile
 import com.moonforce.ohmyainote.document.model.StrokeRecord
+import com.moonforce.ohmyainote.document.model.TEXT_MIN_READER_VERSION
 import com.moonforce.ohmyainote.document.model.TemplateSpec
+import com.moonforce.ohmyainote.document.model.TextRecord
 import com.moonforce.ohmyainote.document.model.validate
 import com.moonforce.ohmyainote.document.model.validateFor
 import kotlinx.coroutines.Dispatchers
@@ -480,6 +482,52 @@ private class LocalNotebookSession(
         snapshot.copy(page = snapshot.page.copy(cards = snapshot.page.cards.filterNot { it.id == cardId }))
     }
 
+    override suspend fun replaceStrokesWithText(pageId: PageId, strokeIds: Set<String>, text: TextRecord) = mutatePage(pageId) { snapshot ->
+        require(text.text.isNotBlank()) { "Recognized text is blank" }
+        require(snapshot.page.texts.none { it.id == text.id }) { "Duplicate text id" }
+        val remaining = snapshot.strokes.filterNot { it.id in strokeIds }
+        snapshot.copy(
+            page = snapshot.page.copy(strokes = remaining, texts = snapshot.page.texts + text),
+            strokes = remaining,
+        )
+    }
+
+    override suspend fun restoreStrokesRemovingText(pageId: PageId, strokes: List<StrokeRecord>, textId: String) = mutatePage(pageId) { snapshot ->
+        require(strokes.all { it.points.isNotEmpty() })
+        val duplicate = (snapshot.strokes.map { it.id } + strokes.map { it.id }).groupingBy { it }.eachCount().any { it.value > 1 }
+        require(!duplicate) { "Duplicate stroke id" }
+        val next = snapshot.strokes + strokes
+        snapshot.copy(
+            page = snapshot.page.copy(strokes = next, texts = snapshot.page.texts.filterNot { it.id == textId }),
+            strokes = next,
+        )
+    }
+
+    override suspend fun removeStrokesAndTexts(pageId: PageId, strokeIds: Set<String>, textIds: Set<String>) = mutatePage(pageId) { snapshot ->
+        val remaining = snapshot.strokes.filterNot { it.id in strokeIds }
+        snapshot.copy(
+            page = snapshot.page.copy(
+                strokes = remaining,
+                texts = snapshot.page.texts.filterNot { it.id in textIds },
+            ),
+            strokes = remaining,
+        )
+    }
+
+    override suspend fun insertStrokesAndTexts(pageId: PageId, strokes: List<StrokeRecord>, texts: List<TextRecord>) = mutatePage(pageId) { snapshot ->
+        if (strokes.isNotEmpty()) {
+            require(strokes.all { it.points.isNotEmpty() })
+            val duplicate = (snapshot.strokes.map { it.id } + strokes.map { it.id }).groupingBy { it }.eachCount().any { it.value > 1 }
+            require(!duplicate) { "Duplicate stroke id" }
+        }
+        require(texts.all { candidate -> snapshot.page.texts.none { it.id == candidate.id } }) { "Duplicate text id" }
+        val next = snapshot.strokes + strokes
+        snapshot.copy(
+            page = snapshot.page.copy(strokes = next, texts = snapshot.page.texts + texts),
+            strokes = next,
+        )
+    }
+
     override suspend fun addTemplatePage() = withContext(Dispatchers.IO) {
         mutex.withLock {
             val current = mutableManifest.value
@@ -505,7 +553,7 @@ private class LocalNotebookSession(
             require(current.pageCount > 1) { "Cannot delete the last page" }
             require(pageId.value in current.pageOrder) { "Page ${pageId.value} is absent" }
             val victim = pageIo.read(pageId.value)
-            require(victim.strokes.isEmpty() && victim.page.cards.isEmpty()) { "Only blank pages can be deleted" }
+            require(victim.strokes.isEmpty() && victim.page.cards.isEmpty() && victim.page.texts.isEmpty()) { "Only blank pages can be deleted" }
             val nextOrder = current.pageOrder.filterNot { it == pageId.value }
             // Reindex first: a crash here leaves stale indexes under the old manifest, which open() repairs.
             nextOrder.forEachIndexed { newIndex, id ->
@@ -561,6 +609,12 @@ private class LocalNotebookSession(
             val current = pageIo.read(pageId.value)
             val next = transform(current)
             next.page.validateFor(mutableManifest.value)
+            val manifest = mutableManifest.value
+            if (next.page.texts.isNotEmpty() && manifest.minReaderVersion < TEXT_MIN_READER_VERSION) {
+                // Bump before the page commit so an old reader cannot open a converted page
+                // whose ink is already gone but whose manifest still says minReaderVersion=1.
+                updateManifest(manifest.copy(minReaderVersion = TEXT_MIN_READER_VERSION))
+            }
             pageIo.commit(next)
             updateManifest(mutableManifest.value)
         }

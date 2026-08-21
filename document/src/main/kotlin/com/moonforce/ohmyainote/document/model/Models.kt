@@ -7,6 +7,10 @@ import java.nio.file.Path
 
 const val FORMAT_VERSION = 1
 const val MIN_READER_VERSION = 1
+/** This app can open notebooks whose [NotebookManifest.minReaderVersion] is at most this. */
+const val READER_CAPABILITY = 2
+/** Notebooks that persist typeset [TextRecord]s require a reader that understands them. */
+const val TEXT_MIN_READER_VERSION = 2
 const val A4_WIDTH_PT = 595.27563f
 const val A4_HEIGHT_PT = 841.88976f
 
@@ -138,6 +142,22 @@ data class PageRect(
 ) {
     val width: Float get() = r - l
     val height: Float get() = b - t
+
+    fun overlaps(other: PageRect): Boolean =
+        l <= other.r && r >= other.l && t <= other.b && b >= other.t
+
+    companion object {
+        fun union(rects: Iterable<PageRect>): PageRect {
+            val list = rects.toList()
+            require(list.isNotEmpty()) { "Cannot union empty rects" }
+            return PageRect(
+                l = list.minOf { it.l },
+                t = list.minOf { it.t },
+                r = list.maxOf { it.r },
+                b = list.maxOf { it.b },
+            )
+        }
+    }
 }
 
 @Serializable
@@ -199,6 +219,18 @@ data class StrokeRecord(
 )
 
 @Serializable
+data class TextRecord(
+    val id: String,
+    val text: String,
+    val x: Float,
+    val y: Float,
+    val fontSizePt: Float,
+    val color: String,
+    val aabb: PageRect,
+    val createdAt: String,
+)
+
+@Serializable
 data class AiCardRecord(
     val id: String,
     val pageId: String,
@@ -220,6 +252,7 @@ data class PageModel(
     val background: PageBackground,
     val strokes: List<StrokeRecord> = emptyList(),
     val cards: List<AiCardRecord> = emptyList(),
+    val texts: List<TextRecord> = emptyList(),
 )
 
 data class PageSnapshot(
@@ -276,7 +309,7 @@ data class Sink(val path: Path)
 
 fun NotebookManifest.validate() {
     require(formatVersion == FORMAT_VERSION) { "Unsupported formatVersion=$formatVersion" }
-    require(minReaderVersion <= FORMAT_VERSION) { "Reader upgrade required" }
+    require(minReaderVersion <= READER_CAPABILITY) { "Reader upgrade required" }
     require(id.isNotBlank() && title.isNotBlank()) { "Notebook id and title are required" }
     require(pageCount > 0 && pageCount == pageOrder.size) { "pageCount/pageOrder mismatch" }
     require(pageOrder.distinct().size == pageOrder.size) { "Duplicate page id" }
@@ -311,4 +344,6 @@ fun PageModel.validateFor(manifest: NotebookManifest) {
     }
     require(strokes.map { it.id }.distinct().size == strokes.size) { "Duplicate stroke id" }
     require(cards.map { it.id }.distinct().size == cards.size) { "Duplicate card id" }
+    require(texts.map { it.id }.distinct().size == texts.size) { "Duplicate text id" }
+    require(texts.all { it.text.isNotBlank() && it.fontSizePt > 0f }) { "Invalid text object" }
 }

@@ -58,6 +58,7 @@ class PageRasterComposer(private val rasterizer: RegionRasterizer) {
                 }
                 val renderer = CanvasStrokeRenderer.create()
                 snapshot.strokes.forEach { record -> renderer.draw(canvas, StrokeBridge.toInk(record), matrix) }
+                drawTexts(canvas, matrix, snapshot)
                 drawCards(canvas, matrix, snapshot, notebookDir)
             })
         } finally {
@@ -104,6 +105,19 @@ class PageRasterComposer(private val rasterizer: RegionRasterizer) {
                 }
             }
             is PageBackground.PdfPage -> Unit
+        }
+        canvas.restore()
+    }
+
+    private fun drawTexts(canvas: Canvas, pageToBitmap: Matrix, snapshot: PageSnapshot) {
+        if (snapshot.page.texts.isEmpty()) return
+        canvas.save()
+        canvas.concat(pageToBitmap)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isSubpixelText = true }
+        snapshot.page.texts.forEach { record ->
+            paint.color = Color.parseColor(record.color)
+            paint.textSize = record.fontSizePt
+            canvas.drawText(record.text, record.x, record.y + record.fontSizePt * 0.8f, paint)
         }
         canvas.restore()
     }

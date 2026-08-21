@@ -22,6 +22,7 @@
 - [x] PR-16：修复 Compose 位图生命周期，避免图片本打开崩溃、背景/封面消失与重用已回收位图
 - [x] PR-17：Material 3 编辑器工具区，接入钢笔/荧光笔颜色与粗细，固定视口避免属性栏导致纸面缩放或位移
 - [x] PR-18：模板空白页删除（含崩溃恢复重排）、AI 卡片点按只读全文展开、FileProvider Sharesheet 分享 PDF / `.ainote`、封面 5 s 防抖、性能浮层 move→frame 测量
+- [x] PR-19：ML Kit Digital Ink 手写转标准字（图标开关、2s 停笔提交、`TextRecord` 与 `minReaderVersion=2`）
 
 代码阶段完成不代表真机验收完成。2026-08-19 已在小米平板（Android 16 / USI 笔）真机通过：模板删页一致性、分享面板拉起、封面 5 s 防抖、200 页内存、旋转 CropBox 导出对齐（结构级）。USI 湿墨延迟、掌拒、压感线宽浓淡、AI 卡片问答等需真笔 / API Key 的条目仍以 `MANUAL_TEST.md` 的未勾选项为发布门禁。
 
@@ -70,7 +71,10 @@
 
 - 图片导入后点击打开：已移除页面背景、AI 卡片缩略图和书架封面上的手动 `Bitmap.recycle()`，避免 Compose 仍在绘制时命中已回收位图。
 - 写字后纸面消失/缩小：工具区固定为 `140dp`，笔刷属性行只在该区域内展开；画布使用 `clipToBounds()`，不再覆盖工具区或触发页面重测量。
+- 抬笔闪一下：按官方 `InProgressStrokesFinishedListener` 在同一 HWUI 帧 `View.invalidate()`。干墨改为 pager 外的 `FinishedStrokesView` + `ViewStrokeRenderer`；`onStrokesFinished` 回调里直接 `present()`，页快照 / undo 的 `StateFlow` 推迟到下一帧。
+- 切换笔型/颜色画出来仍是第一支笔：`InProgressStrokes` 的 `pointerInput` 只跟变换矩阵重启；`remember(viewport)` 之后默认 `{ defaultBrush }` 会一直抓着第一支笔。按下时通过 `nextBrush` 读 `rememberUpdatedState` 的最新 brush。
 - 编辑器工具区：钢笔、荧光笔、橡皮、顶部导出菜单已完成真机触摸检查；视觉对比记录见 [`../design-qa.md`](../design-qa.md)。
+- 手写转写：`:hwr` 使用 ML Kit Digital Ink（`zh-CN`），模型按需下载、不进 APK；识别只吃干墨 `StrokeRecord`，不碰 `InProgressStrokes`。无 Google 服务时下载失败并保持开关关闭。真机转写需有 GMS 的 USI 笔机。
 
 ## 2026-08-19 release-gate pass (PR-18)
 
@@ -93,3 +97,32 @@
 - 旋转 CropBox 导出对齐：导出与源逐页几何一致，原始内容流逐字节内嵌（同对象哈希），仅加 `[q\n]`/`[Q\n]` 无缩放平移。
 
 剩余人工（需真笔 / API Key / 目标 App）：USI 湿墨延迟、掌拒、压感线宽浓淡、AI 卡片问答与错误文案、双指 pinch、图片 EXIF、SAF 图片导入、`.ainote` 往返、目标 App 打开分享文件后卡片可见。详见 `MANUAL_TEST.md` 的 2026-08-19 执行记录。
+
+## 2026-08-21 测试补全记录
+
+**最终结果（可联网环境，纯 ASCII 工作路径 `D:\ainote-run` 物理副本）：8 个模块全绿，46 例，0 失败。**
+
+| 模块 | 测试类 | 用例 | 结果 |
+|---|---|---|---|
+| `:document` | DigitalInkGeometry / Geometry / OmaInputsV1 / OmaPressureInkV1 / LocalNotebookStore 等 | 18 | ✅ 全过 |
+| `:ai-api` | OpenAiCompatibleClientTest | 1 | ✅ 全过 |
+| `:ink` | HitTestTest（文本擦除 AABB/越界/内边距/空输入） | 4 | ✅ 全过 |
+| `:pdf` | TileKeyTest（键值相等/单坐标差异） | 2 | ✅ 全过 |
+| `:ai` | OverlaySessionTest（加空校验/卡片锚定右侧/右侧满则下绕/底部满则钳制） | 5 | ✅ 全过 |
+| `:export` | ExportGeometryTest（四旋转/裁剪/选项默认/进度单调）+ FlattenedPdfExporterTest（2 页压感笔+荧光笔导出、原子写无残留临时文件） | 11 | ✅ 全过 |
+| `:hwr` | DigitalInkModelStoreTest（下载超时 `withTimeout` 取消并以 `IllegalStateException` 包装） | 1 | ✅ 全过 |
+| `:app` | TilePlanTest（可见瓦片范围/外翻钳制/低缩放整页/密度×缩放桶） | 4 | ✅ 全过 |
+
+### 关键诊断与处置
+
+- **中文路径 Gradle Test Worker 问题**：`:ai-api` 等模块在 `D:\开源项目\ainote` 路径下，Gradle 8.11 测试 worker 抛 `ClassNotFoundException`（同一构建经 ASCII 路径通过）。判定为 Windows 中文工作目录与 worker 类路径编码交互的环境问题，**非测试代码缺陷**。后续 JVM 单测请在纯 ASCII 路径执行（本记录即在 `D:\ainote-run` 物理副本上跑通）；中文主仓库路径留作 IDE/`assembleDebug` 使用。
+- **`android.graphics.Color` / `android.util.LruCache` / `android.text.TextUtils` 在纯 JVM 单测下是"not mocked"桩**：
+  - `:export`：抽出 `ArgbColor` 接口（`AndroidArgbColor` 走真 `Color`、`PureJvmArgbColor` 纯 Kotlin 解码），`FlattenedPdfExporter` 构造注入，使模板/笔迹导出路径可离线跑。卡片/文本绘制仍走真 `Canvas`（仅真机可测）。
+  - `:pdf`：`TileCache` 包 `LruCache`，纯 JVM 下 `size()/snapshot()` 均 not-mocked；测试只覆盖纯数据类 `TileKey`。
+- **`androidx.ink` 含 JNI 原生库**（`StrokeInputBatchNative`）：`Stroke.shape` 需 on-device；`:ink` 的 `eraseIntersectingStrokes` 与 `:app` 的 `EditorViewModel.loadPage`（经 `StrokeBridge.load`）因此**只能在仪表化/真机测试**，JVM 侧仅测纯几何/文本分支。
+- **ML Kit `Tasks` 调 `TextUtils`、`MlKitContext` 未初始化**：`:hwr` 成功/失败路径依赖 `Tasks.forResult/forException`（内部调 Android 桩），无法 JVM 跑；仅超时路径用手写 `mock(Task)` 旁路 `Tasks` 得以离线验证 `withTimeout`+取消+包装契约。
+- **`:hwr` 生产修复**：`DigitalInkModelStore` 加 5 分钟 `withTimeout`（挂起不再永久阻塞）；`modelManager` 改为惰性、构造参数走 `internal` 次构造（保持 `RemoteModelManager` 不出现在公共 API，`:app` 无需 ML Kit 依赖即可编译）。
+- **已删除不可 JVM 运行的投机测试**：`EditorViewModelTest`（强耦合 `AppContainer` 终态 val、`DigitalInkModelStore` 终类、`StrokeBridge` 原生、DataStore）、`HandwritingRecognizerTest`/`HwrSettingsStoreTest`（ML Kit/`Canvas`/DataStore 运行时）——这些属真机/仪表化测试范畴，留待 `connectedAndroidTest`。
+
+- 清理未引用的 `local-m2-tmp/` 存根 POM。
+- 运行方式：`./gradlew --continue :document:test :ai-api:test :ink:testDebugUnitTest :pdf:testDebugUnitTest :ai:testDebugUnitTest :export:testDebugUnitTest :hwr:testDebugUnitTest :app:testDebugUnitTest`（JVM 模块用 `:module:test`，Android 模块用 `:module:testDebugUnitTest`）。

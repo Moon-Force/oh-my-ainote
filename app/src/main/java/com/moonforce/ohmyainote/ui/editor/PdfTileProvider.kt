@@ -2,6 +2,7 @@ package com.moonforce.ohmyainote.ui.editor
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import androidx.compose.runtime.Stable
 import com.moonforce.ohmyainote.pdf.PageBitmapRequest
 import com.moonforce.ohmyainote.pdf.PdfPageInfo
 import com.moonforce.ohmyainote.pdf.PdfPageRenderer
@@ -17,6 +18,7 @@ const val PDF_TILE_PX = 512
  * resolution and drawn at the live viewport scale, so high zoom stays sharp without a
  * single 4096-capped whole-page bitmap.
  */
+@Stable
 class PdfTileProvider {
     val cache = TileCache()
     private val renderers = mutableMapOf<String, PdfPageRenderer>()
